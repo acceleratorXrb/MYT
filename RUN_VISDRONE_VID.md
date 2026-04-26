@@ -152,8 +152,8 @@ python mbyolo_train.py \
   --data output_dir/visdrone_vid/VisDrone-VID.local.yaml \
   --config ultralytics/cfg/models/mamba-yolo/Mamba-YOLO-T.yaml \
   --imgsz 640 \
-  --batch_size 16 \
-  --epochs 100 \
+  --batch_size 32 \
+  --epochs 50 \
   --workers 8 \
   --device 0 \
   --amp \
@@ -171,8 +171,8 @@ python mbyolo_train.py \
   --data output_dir/visdrone_vid/VisDrone-VID.local.yaml \
   --config ultralytics/cfg/models/mamba-yolo/Mamba-YOLO-T-SOD.yaml \
   --imgsz 640 \
-  --batch_size 16 \
-  --epochs 100 \
+  --batch_size 32 \
+  --epochs 50 \
   --workers 8 \
   --device 0 \
   --amp \
