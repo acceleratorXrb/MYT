@@ -141,22 +141,56 @@ restore_raw_splits_from_zips() {
   done
 }
 
-ensure_dataset_yaml() {
-  mkdir -p "${PROJECT}" "${MPLCONFIGDIR}" "${YOLO_CONFIG_DIR}"
+count_files() {
+  find "$1" -type f 2>/dev/null | wc -l | tr -d ' '
+}
 
-  if [[ -d "${YOLO_ROOT}/images/train" && -d "${YOLO_ROOT}/images/val" && -d "${YOLO_ROOT}/labels/train" && -d "${YOLO_ROOT}/labels/val" ]]; then
-    local test_dir="images/test-dev"
-    if [[ -d "${YOLO_ROOT}/images/test" ]]; then
-      test_dir="images/test"
+raw_frame_count() {
+  local split_dir="${RAW_ROOT}/VisDrone2019-VID-$1"
+  if [[ ! -d "${split_dir}/sequences" ]]; then
+    printf '0\n'
+    return 1
+  fi
+  find "${split_dir}/sequences" -type f | wc -l | tr -d ' '
+}
+
+expected_yolo_test_dir() {
+  if [[ -d "${YOLO_ROOT}/images/test" && -d "${YOLO_ROOT}/labels/test" ]]; then
+    printf '%s\n' "test"
+  else
+    printf '%s\n' "test-dev"
+  fi
+}
+
+is_yolo_layout_complete() {
+  local split yolo_split expected actual_images actual_labels
+  for split in train val test-dev; do
+    expected="$(raw_frame_count "${split}")" || return 1
+    if [[ "${split}" == "test-dev" ]]; then
+      yolo_split="$(expected_yolo_test_dir)"
+    else
+      yolo_split="${split}"
     fi
-    local dataset_root
-    dataset_root="$(cd "${YOLO_ROOT}" && pwd)"
-    cat > "${DATA_YAML}" <<EOF
+    actual_images="$(count_files "${YOLO_ROOT}/images/${yolo_split}")"
+    actual_labels="$(count_files "${YOLO_ROOT}/labels/${yolo_split}")"
+    if [[ "${actual_images}" != "${expected}" || "${actual_labels}" != "${expected}" ]]; then
+      return 1
+    fi
+  done
+  return 0
+}
+
+write_dataset_yaml() {
+  local test_dir
+  test_dir="$(expected_yolo_test_dir)"
+  local dataset_root
+  dataset_root="$(cd "${YOLO_ROOT}" && pwd)"
+  cat > "${DATA_YAML}" <<EOF
 # Auto-generated VisDrone2019-VID dataset config
 path: ${dataset_root}
 train: images/train
 val: images/val
-test: ${test_dir}
+test: images/${test_dir}
 
 names:
   0: pedestrian
@@ -170,20 +204,30 @@ names:
   8: bus
   9: motor
 EOF
+}
+
+ensure_dataset_yaml() {
+  mkdir -p "${PROJECT}" "${MPLCONFIGDIR}" "${YOLO_CONFIG_DIR}"
+
+  if is_yolo_layout_complete; then
+    write_dataset_yaml
     return
   fi
 
+  log "Rebuilding VisDrone-VID YOLO layout from raw splits"
+  rm -rf "${YOLO_ROOT}/images" "${YOLO_ROOT}/labels"
   if [[ ! -d "${RAW_ROOT}/VisDrone2019-VID-train" || ! -d "${RAW_ROOT}/VisDrone2019-VID-val" || ! -d "${RAW_ROOT}/VisDrone2019-VID-test-dev" ]]; then
     printf 'VisDrone raw splits are missing under %s\n' "${RAW_ROOT}" >&2
     exit 1
   fi
 
-  log "Converting VisDrone-VID to YOLO layout"
   "${PYTHON}" tools/prepare_visdrone_vid_yolo.py \
     --src "${RAW_ROOT}" \
     --out "${YOLO_ROOT}" \
     --yaml "${DATA_YAML}" \
     --overwrite
+
+  write_dataset_yaml
 }
 
 run_checks() {
