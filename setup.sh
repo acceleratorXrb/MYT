@@ -118,15 +118,26 @@ restore_raw_splits_from_zips() {
   for split in train val test-dev; do
     local split_dir="${RAW_ROOT}/VisDrone2019-VID-${split}"
     local zip_path="${ZIP_ROOT}/VisDrone2019-VID-${split}.zip"
-    if [[ -d "${split_dir}/annotations" && -d "${split_dir}/sequences" ]]; then
-      continue
-    fi
     if [[ ! -f "${zip_path}" ]]; then
       printf 'Missing archive: %s\n' "${zip_path}" >&2
       exit 1
     fi
+    local expected_files
+    expected_files="$(unzip -Z1 "${zip_path}" | grep -v '/$' | wc -l | tr -d ' ')"
+    local actual_files=0
+    if [[ -d "${split_dir}" ]]; then
+      actual_files="$(find "${split_dir}" -type f | wc -l | tr -d ' ')"
+    fi
+
+    if [[ "${actual_files}" == "${expected_files}" && -d "${split_dir}/annotations" && -d "${split_dir}/sequences" ]]; then
+      continue
+    fi
+    if [[ -d "${split_dir}" ]]; then
+      log "Removing incomplete split ${split_dir} (${actual_files}/${expected_files} files)"
+      rm -rf "${split_dir}"
+    fi
     log "Extracting ${zip_path} -> ${RAW_ROOT}"
-    unzip -n "${zip_path}" -d "${RAW_ROOT}"
+    unzip -q "${zip_path}" -d "${RAW_ROOT}"
   done
 }
 
