@@ -108,6 +108,7 @@ else
 fi
 
 "${PYTHON}" -m pip install \
+  "numpy<2" \
   matplotlib \
   pandas \
   pyyaml \
