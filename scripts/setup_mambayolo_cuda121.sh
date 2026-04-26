@@ -40,7 +40,7 @@ torch_url="${PYTORCH_WHEEL_BASE}/torch-${TORCH_VERSION}+cu121-${wheel_tag}.whl"
 torchvision_url="${PYTORCH_WHEEL_BASE}/torchvision-${TORCHVISION_VERSION}+cu121-${wheel_tag}.whl"
 torchaudio_url="${PYTORCH_WHEEL_BASE}/torchaudio-${TORCHAUDIO_VERSION}+cu121-${wheel_tag}.whl"
 
-"${PYTHON}" -m pip install --upgrade pip -i "${PIP_INDEX_URL}"
+"${PYTHON}" -m pip install --upgrade pip setuptools wheel -i "${PIP_INDEX_URL}"
 if "${PYTHON}" - <<PY
 import importlib
 
