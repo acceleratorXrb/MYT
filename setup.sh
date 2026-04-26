@@ -53,15 +53,15 @@ install_system_packages() {
     return
   fi
 
-  local sudo_cmd=""
+  local -a apt_prefix=()
   if [[ "${EUID}" -ne 0 ]]; then
     require_cmd sudo
-    sudo_cmd="sudo"
+    apt_prefix=(sudo)
   fi
 
   log "Installing system packages"
-  "${sudo_cmd}" apt-get update
-  "${sudo_cmd}" apt-get install -y \
+  "${apt_prefix[@]}" apt-get update
+  "${apt_prefix[@]}" apt-get install -y \
     build-essential \
     git \
     octave \
