@@ -152,8 +152,8 @@ python mbyolo_train.py \
   --data output_dir/visdrone_vid/VisDrone-VID.local.yaml \
   --config ultralytics/cfg/models/mamba-yolo/Mamba-YOLO-T.yaml \
   --imgsz 640 \
-  --batch_size 16 \
-  --epochs 100 \
+  --batch_size 32 \
+  --epochs 50 \
   --workers 8 \
   --device 0 \
   --amp \
@@ -171,8 +171,8 @@ python mbyolo_train.py \
   --data output_dir/visdrone_vid/VisDrone-VID.local.yaml \
   --config ultralytics/cfg/models/mamba-yolo/Mamba-YOLO-T-SOD.yaml \
   --imgsz 640 \
-  --batch_size 16 \
-  --epochs 100 \
+  --batch_size 32 \
+  --epochs 50 \
   --workers 8 \
   --device 0 \
   --amp \
@@ -194,6 +194,19 @@ python mbyolo_train.py \
   --project output_dir/visdrone_vid \
   --name mambayolo_t_val
 ```
+
+During VisDrone-VID validation inside training, `mbyolo_train.py --task train`
+now computes tracking consistency metrics every validation epoch, alongside the
+standard detection metrics:
+
+- `metrics/IDF1`
+- `metrics/IDSwitches`
+- `metrics/Frag`
+
+These metrics are computed from the original VisDrone `annotations/` track IDs
+and ByteTrack tracks built from the current validation predictions. The original
+split root must remain available under the converted dataset root, for example
+`datasets/VisDrone-VID/raw/VisDrone2019-VID-val/annotations`.
 
 ## 5. Test-dev and Official Result Files
 

@@ -314,7 +314,7 @@ class BaseValidator:
     @property
     def metric_keys(self):
         """Returns the metric keys used in YOLO training/validation."""
-        return []
+        return getattr(getattr(self, "metrics", None), "keys", [])
 
     def on_plot(self, name, data=None):
         """Registers plots (e.g. to be consumed in callbacks)"""
