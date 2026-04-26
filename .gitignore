@@ -3,7 +3,11 @@ __pycache__/
 *.py[cod]
 *$py.class
 .idea
+.codex
+.codex/
 output_dir
+datasets/
+third_party/VisDrone2018-VID-toolkit/
 ultralytics.egg-info
 docs
 examples
