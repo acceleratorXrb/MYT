@@ -154,6 +154,20 @@ raw_frame_count() {
   find "${split_dir}/sequences" -type f | wc -l | tr -d ' '
 }
 
+raw_split_complete() {
+  local split_dir="${RAW_ROOT}/VisDrone2019-VID-$1"
+  [[ -d "${split_dir}/annotations" && -d "${split_dir}/sequences" ]] || return 1
+  [[ "$(find "${split_dir}/annotations" -type f 2>/dev/null | wc -l | tr -d ' ')" != "0" ]] || return 1
+  [[ "$(find "${split_dir}/sequences" -type f 2>/dev/null | wc -l | tr -d ' ')" != "0" ]] || return 1
+}
+
+all_raw_splits_complete() {
+  local split
+  for split in train val test-dev; do
+    raw_split_complete "${split}" || return 1
+  done
+}
+
 expected_yolo_test_dir() {
   if [[ -d "${YOLO_ROOT}/images/test" && -d "${YOLO_ROOT}/labels/test" ]]; then
     printf '%s\n' "test"
@@ -208,6 +222,11 @@ EOF
 
 ensure_dataset_yaml() {
   mkdir -p "${PROJECT}" "${MPLCONFIGDIR}" "${YOLO_CONFIG_DIR}"
+
+  if ! all_raw_splits_complete; then
+    printf 'VisDrone raw splits are incomplete under %s; refusing to rebuild images/labels and preserve existing YOLO layout.\n' "${RAW_ROOT}" >&2
+    return 1
+  fi
 
   if is_yolo_layout_complete; then
     write_dataset_yaml
