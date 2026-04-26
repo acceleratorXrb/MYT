@@ -114,9 +114,19 @@ If you want the setup script to launch formal training at the end:
 START_TRAIN=1 bash setup.sh
 ```
 
+The setup script trains the baseline T model by default. To train the low-overhead
+small-object SOD variant added in this repository, pass `MODEL_CONFIG` and use a
+separate run name:
+
+```bash
+MODEL_CONFIG=ultralytics/cfg/models/mamba-yolo/Mamba-YOLO-T-SOD.yaml \
+NAME=mambayolo_t_sod START_TRAIN=1 bash setup.sh
+```
+
 ## 3. Train
 
-Start with a small batch and the T model:
+Start with a small batch and the T model. Keep this baseline command unchanged
+for fair MAP50 comparison:
 
 Before training, verify the project-local dataset, Python environment, CUDA visibility, and model construction:
 
@@ -149,6 +159,25 @@ python mbyolo_train.py \
   --amp \
   --project output_dir/visdrone_vid \
   --name mambayolo_t
+```
+
+To train the SOD model with the added P2/4 small-object branch and
+`SmallObjectStateGate`, use the same training settings and only change the model
+config and output name:
+
+```bash
+python mbyolo_train.py \
+  --task train \
+  --data output_dir/visdrone_vid/VisDrone-VID.local.yaml \
+  --config ultralytics/cfg/models/mamba-yolo/Mamba-YOLO-T-SOD.yaml \
+  --imgsz 640 \
+  --batch_size 16 \
+  --epochs 100 \
+  --workers 8 \
+  --device 0 \
+  --amp \
+  --project output_dir/visdrone_vid \
+  --name mambayolo_t_sod
 ```
 
 ## 4. Validate
@@ -235,6 +264,13 @@ The full T-model pipeline is wrapped in:
 
 ```bash
 bash scripts/run_visdrone_vid_t_full.sh
+```
+
+The same wrapper can run the SOD variant without changing the script:
+
+```bash
+MODEL_CONFIG=ultralytics/cfg/models/mamba-yolo/Mamba-YOLO-T-SOD.yaml \
+NAME=mambayolo_t_sod bash scripts/run_visdrone_vid_t_full.sh
 ```
 
 The default dataset path is project-local: `datasets/VisDrone-VID`.

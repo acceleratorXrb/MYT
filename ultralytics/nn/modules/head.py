@@ -10,11 +10,11 @@ from torch.nn.init import constant_, xavier_uniform_
 from ultralytics.utils.tal import TORCH_1_10, dist2bbox, dist2rbox, make_anchors
 
 from .block import DFL, BNContrastiveHead, ContrastiveHead, Proto
-from .conv import Conv
+from .conv import Conv, DWConv
 from .transformer import MLP, DeformableTransformerDecoder, DeformableTransformerDecoderLayer
 from .utils import bias_init_with_prob, linear_init
 
-__all__ = "Detect", "Segment", "Pose", "Classify", "OBB", "RTDETRDecoder"
+__all__ = "Detect", "LightP2Detect", "Segment", "Pose", "Classify", "OBB", "RTDETRDecoder"
 
 
 class Detect(nn.Module):
@@ -87,6 +87,18 @@ class Detect(nn.Module):
     def decode_bboxes(self, bboxes, anchors):
         """Decode bounding boxes."""
         return dist2bbox(bboxes, anchors, xywh=True, dim=1)
+
+
+class LightP2Detect(Detect):
+    """YOLO detect head with lightweight towers for the stride-4 P2 branch."""
+
+    def __init__(self, nc=80, ch=()):
+        super().__init__(nc, ch)
+        if ch:
+            c2 = max(16, self.reg_max * 2)
+            c3 = max(16, min(ch[0], self.nc))
+            self.cv2[0] = nn.Sequential(DWConv(ch[0], ch[0], 3), Conv(ch[0], c2, 1), nn.Conv2d(c2, 4 * self.reg_max, 1))
+            self.cv3[0] = nn.Sequential(DWConv(ch[0], ch[0], 3), Conv(ch[0], c3, 1), nn.Conv2d(c3, self.nc, 1))
 
 
 class Segment(Detect):
