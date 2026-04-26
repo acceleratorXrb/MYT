@@ -40,6 +40,7 @@ from ultralytics.nn.modules import (
     HGBlock,
     HGStem,
     ImagePoolingAttn,
+    LightP2Detect,
     Pose,
     RepC3,
     RepConv,
@@ -49,6 +50,7 @@ from ultralytics.nn.modules import (
     Segment,
     WorldDetect,
     SimpleStem,
+    SmallObjectStateGate,
     VisionClueMerge,
     VSSBlock,
     XSSBlock
@@ -898,7 +900,7 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             DWConvTranspose2d,
             C3x,
             RepC3,
-            SimpleStem, VisionClueMerge, VSSBlock, XSSBlock
+            SimpleStem, VisionClueMerge, VSSBlock, XSSBlock, SmallObjectStateGate
         }:
             c1, c2 = ch[f], args[0]
             if c2 != nc:  # if c2 not equal to number of classes (i.e. for Classify() output)
@@ -927,7 +929,7 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             args = [ch[f]]
         elif m is Concat:
             c2 = sum(ch[x] for x in f)
-        elif m in {Detect, WorldDetect, Segment, Pose, OBB, ImagePoolingAttn}:
+        elif m in {Detect, LightP2Detect, WorldDetect, Segment, Pose, OBB, ImagePoolingAttn}:
             args.append([ch[x] for x in f])
             if m is Segment:
                 args[2] = make_divisible(min(args[2], max_channels) * width, 8)

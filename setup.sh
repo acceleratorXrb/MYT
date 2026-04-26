@@ -15,6 +15,7 @@ WORKERS="${WORKERS:-4}"
 EPOCHS="${EPOCHS:-100}"
 PROJECT="${PROJECT:-output_dir/visdrone_vid}"
 NAME="${NAME:-mambayolo_t}"
+MODEL_CONFIG="${MODEL_CONFIG:-ultralytics/cfg/models/mamba-yolo/Mamba-YOLO-T.yaml}"
 DATA_YAML="${DATA_YAML:-${PROJECT}/VisDrone-VID.local.yaml}"
 
 TOOLKIT_DIR="${TOOLKIT_DIR:-third_party/VisDrone2018-VID-toolkit}"
@@ -53,15 +54,15 @@ install_system_packages() {
     return
   fi
 
-  local -a apt_prefix=()
+  local apt_prefix=""
   if [[ "${EUID}" -ne 0 ]]; then
     require_cmd sudo
-    apt_prefix=(sudo)
+    apt_prefix="sudo"
   fi
 
   log "Installing system packages"
-  "${apt_prefix[@]}" apt-get update
-  "${apt_prefix[@]}" apt-get install -y \
+  ${apt_prefix} apt-get update
+  ${apt_prefix} apt-get install -y \
     aria2 \
     build-essential \
     git \
@@ -264,7 +265,7 @@ start_training() {
   "${PYTHON}" mbyolo_train.py \
     --task train \
     --data "${DATA_YAML}" \
-    --config ultralytics/cfg/models/mamba-yolo/Mamba-YOLO-T.yaml \
+    --config "${MODEL_CONFIG}" \
     --imgsz "${IMGSZ}" \
     --batch_size "${BATCH}" \
     --epochs "${EPOCHS}" \
