@@ -64,6 +64,42 @@ The same setup is wrapped in:
 bash scripts/setup_mambayolo_cuda121.sh
 ```
 
+For a fresh machine after cloning this GitHub repository, the one-click entry is:
+
+```bash
+bash setup.sh
+```
+
+This setup script will:
+
+- install system packages with `apt-get` when available
+- clone `third_party/VisDrone2018-VID-toolkit`
+- create `.venv` and install Python/CUDA dependencies
+- download official `VisDrone2019-VID-{train,val,test-dev}.zip` archives when they are missing
+- restore raw official splits from `datasets/VisDrone-VID/*.zip` when those zips exist
+- build the YOLO-format dataset when needed
+- run runtime checks
+- start formal training by default
+
+Useful overrides on a new server:
+
+```bash
+RAW_ROOT=/path/to/VisDrone2019-VID-raw DEVICE=0 BATCH=4 WORKERS=4 EPOCHS=100 \
+bash setup.sh
+```
+
+If you only want to restore the environment and data without immediately starting training:
+
+```bash
+START_TRAIN=0 bash setup.sh
+```
+
+If you want to forbid automatic dataset downloads and only use local archives:
+
+```bash
+DOWNLOAD_DATA=0 START_TRAIN=0 bash setup.sh
+```
+
 ## 3. Train
 
 Start with a small batch and the T model:
