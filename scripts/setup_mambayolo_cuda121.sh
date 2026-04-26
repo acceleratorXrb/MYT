@@ -116,7 +116,7 @@ fi
   psutil \
   py-cpuinfo \
   seaborn \
-  thop \
+  ultralytics-thop>=0.2.5 \
   timm \
   einops \
   opencv-python \
