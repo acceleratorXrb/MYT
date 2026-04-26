@@ -79,6 +79,16 @@ expected = {
     "torchvision": "${TORCHVISION_VERSION}",
     "torchaudio": "${TORCHAUDIO_VERSION}",
 }
+expected_cuda_tag = "${TORCH_CUDA_TAG}"
+cuda_tag_map = {
+    "11.8": "cu118",
+    "12.1": "cu121",
+}
+
+def installed_cuda_tag(module):
+    cuda_version = getattr(getattr(module, "version", None), "cuda", None)
+    return cuda_tag_map.get(cuda_version, None)
+
 for name, version in expected.items():
     try:
         module = importlib.import_module(name)
@@ -86,11 +96,14 @@ for name, version in expected.items():
         raise SystemExit(1)
     if getattr(module, "__version__", "").split("+", 1)[0] != version:
         raise SystemExit(1)
+    if name == "torch" and installed_cuda_tag(module) != expected_cuda_tag:
+        raise SystemExit(1)
 print("Pinned torch packages already installed, skipping reinstall")
 PY
 then
   :
 else
+  "${PYTHON}" -m pip uninstall -y torch torchvision torchaudio >/dev/null 2>&1 || true
   "${PYTHON}" -m pip install "${torch_url}" "${torchvision_url}" "${torchaudio_url}" -i "${PIP_INDEX_URL}"
 fi
 
