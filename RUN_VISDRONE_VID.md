@@ -79,7 +79,7 @@ This setup script will:
 - restore raw official splits from `datasets/VisDrone-VID/*.zip` when those zips exist
 - build the YOLO-format dataset when needed
 - run runtime checks
-- start formal training by default
+- stop at a ready-to-train state by default
 
 Useful overrides on a new server:
 
@@ -88,16 +88,23 @@ RAW_ROOT=/path/to/VisDrone2019-VID-raw DEVICE=0 BATCH=4 WORKERS=4 EPOCHS=100 \
 bash setup.sh
 ```
 
-If you only want to restore the environment and data without immediately starting training:
+The default behavior is to restore the environment and data without immediately
+starting training:
 
 ```bash
-START_TRAIN=0 bash setup.sh
+bash setup.sh
 ```
 
 If you want to forbid automatic dataset downloads and only use local archives:
 
 ```bash
 DOWNLOAD_DATA=0 START_TRAIN=0 bash setup.sh
+```
+
+If you want the setup script to launch formal training at the end:
+
+```bash
+START_TRAIN=1 bash setup.sh
 ```
 
 ## 3. Train

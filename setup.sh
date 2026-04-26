@@ -24,7 +24,7 @@ ZIP_ROOT="${ZIP_ROOT:-${ROOT_DIR}/datasets/VisDrone-VID}"
 
 INSTALL_SYSTEM="${INSTALL_SYSTEM:-1}"
 DOWNLOAD_DATA="${DOWNLOAD_DATA:-1}"
-START_TRAIN="${START_TRAIN:-1}"
+START_TRAIN="${START_TRAIN:-0}"
 
 export MPLCONFIGDIR="${MPLCONFIGDIR:-/tmp/mambayolo_matplotlib}"
 export YOLO_CONFIG_DIR="${YOLO_CONFIG_DIR:-/tmp/mambayolo_ultralytics}"
