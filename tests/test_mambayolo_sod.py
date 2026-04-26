@@ -6,6 +6,14 @@ import yaml
 from ultralytics.utils import ROOT
 
 
+def test_mambayolo_sod_yaml_is_detect_task():
+    from ultralytics.nn.tasks import guess_model_task, yaml_model_load
+
+    cfg = yaml_model_load(ROOT / "cfg" / "models" / "mamba-yolo" / "Mamba-YOLO-T-SOD.yaml")
+
+    assert guess_model_task(cfg) == "detect"
+
+
 def test_mambayolo_sod_yaml_adds_p2_detection_branch():
     yaml_path = ROOT / "cfg" / "models" / "mamba-yolo" / "Mamba-YOLO-T-SOD.yaml"
 
