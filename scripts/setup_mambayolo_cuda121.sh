@@ -78,7 +78,7 @@ fi
 
 (
   cd selective_scan
-  "../${PYTHON}" -m pip install . -i "${PIP_INDEX_URL}"
+  "../${PYTHON}" -m pip install --no-build-isolation --no-deps -v . -i "${PIP_INDEX_URL}"
 )
 
 "${PYTHON}" -m pip install --no-build-isolation --no-deps -v -e . -i "${PIP_INDEX_URL}"
