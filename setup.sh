@@ -62,6 +62,7 @@ install_system_packages() {
   log "Installing system packages"
   "${apt_prefix[@]}" apt-get update
   "${apt_prefix[@]}" apt-get install -y \
+    aria2 \
     build-essential \
     git \
     octave \

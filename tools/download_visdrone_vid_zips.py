@@ -2,6 +2,8 @@
 """Download VisDrone2019-VID official split archives into the project."""
 
 import argparse
+import shutil
+import subprocess
 from pathlib import Path
 
 import requests
@@ -36,6 +38,52 @@ def parse_args():
 
 def download(url, dst, timeout):
     tmp = dst.with_suffix(dst.suffix + ".part")
+    if shutil.which("aria2c"):
+        cmd = [
+            "aria2c",
+            "--continue=true",
+            "--allow-overwrite=true",
+            "--file-allocation=none",
+            "--summary-interval=1",
+            "--console-log-level=notice",
+            "--max-connection-per-server=4",
+            "--split=4",
+            "--retry-wait=3",
+            "--timeout=60",
+            "--dir",
+            str(dst.parent),
+            "--out",
+            tmp.name,
+            url,
+        ]
+        subprocess.run(cmd, check=True)
+        tmp.replace(dst)
+        return
+
+    if shutil.which("curl"):
+        cmd = [
+            "curl",
+            "-L",
+            "--fail",
+            "--continue-at",
+            "-",
+            "--retry",
+            "5",
+            "--retry-delay",
+            "3",
+            "--connect-timeout",
+            "30",
+            "--max-time",
+            str(timeout),
+            "--progress-bar",
+            "-o",
+            str(tmp),
+            url,
+        ]
+        subprocess.run(cmd, check=True)
+        tmp.replace(dst)
+        return
+
     with requests.get(url, stream=True, timeout=(30, timeout)) as response:
         response.raise_for_status()
         total = int(response.headers.get("content-length", 0))
