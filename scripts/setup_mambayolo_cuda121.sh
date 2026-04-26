@@ -108,6 +108,13 @@ else
 fi
 
 "${PYTHON}" -m pip install \
+  matplotlib \
+  pandas \
+  pyyaml \
+  scipy \
+  tqdm \
+  psutil \
+  py-cpuinfo \
   seaborn \
   thop \
   timm \
