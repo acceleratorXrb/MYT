@@ -4,16 +4,46 @@ set -euo pipefail
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 VENV_DIR="${VENV_DIR:-.venv}"
 PIP_INDEX_URL="${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
-PYTORCH_WHEEL_BASE="${PYTORCH_WHEEL_BASE:-https://mirrors.aliyun.com/pytorch-wheels/cu121}"
 TORCH_VERSION="${TORCH_VERSION:-2.3.0}"
 TORCHVISION_VERSION="${TORCHVISION_VERSION:-0.18.0}"
 TORCHAUDIO_VERSION="${TORCHAUDIO_VERSION:-2.3.0}"
+
+detect_cuda_tag() {
+  if [[ -n "${TORCH_CUDA_TAG:-}" ]]; then
+    printf '%s\n' "${TORCH_CUDA_TAG}"
+    return
+  fi
+
+  local nvcc_version
+  if command -v nvcc >/dev/null 2>&1; then
+    nvcc_version="$(nvcc --version 2>/dev/null | sed -n 's/.*release \([0-9][0-9]*\)\.\([0-9][0-9]*\).*/\1.\2/p' | head -n1)"
+    case "${nvcc_version}" in
+      11.8) printf '%s\n' "cu118"; return ;;
+      12.1) printf '%s\n' "cu121"; return ;;
+    esac
+  fi
+
+  if [[ -n "${CUDA_HOME:-}" && -f "${CUDA_HOME}/version.txt" ]]; then
+    if grep -q 'CUDA Version 11.8' "${CUDA_HOME}/version.txt"; then
+      printf '%s\n' "cu118"
+      return
+    fi
+    if grep -q 'CUDA Version 12.1' "${CUDA_HOME}/version.txt"; then
+      printf '%s\n' "cu121"
+      return
+    fi
+  fi
+
+  printf '%s\n' "cu121"
+}
 
 if [[ ! -x "${VENV_DIR}/bin/python" ]]; then
   "${PYTHON_BIN}" -m venv "${VENV_DIR}"
 fi
 
 PYTHON="${VENV_DIR}/bin/python"
+TORCH_CUDA_TAG="$(detect_cuda_tag)"
+PYTORCH_WHEEL_BASE="${PYTORCH_WHEEL_BASE:-https://mirrors.aliyun.com/pytorch-wheels/${TORCH_CUDA_TAG}}"
 
 wheel_tag="$("${PYTHON}" - <<'PY'
 import platform
@@ -36,9 +66,9 @@ print(f"{py_tag}-{py_tag}-{platform_tag}")
 PY
 )"
 
-torch_url="${PYTORCH_WHEEL_BASE}/torch-${TORCH_VERSION}+cu121-${wheel_tag}.whl"
-torchvision_url="${PYTORCH_WHEEL_BASE}/torchvision-${TORCHVISION_VERSION}+cu121-${wheel_tag}.whl"
-torchaudio_url="${PYTORCH_WHEEL_BASE}/torchaudio-${TORCHAUDIO_VERSION}+cu121-${wheel_tag}.whl"
+torch_url="${PYTORCH_WHEEL_BASE}/torch-${TORCH_VERSION}+${TORCH_CUDA_TAG}-${wheel_tag}.whl"
+torchvision_url="${PYTORCH_WHEEL_BASE}/torchvision-${TORCHVISION_VERSION}+${TORCH_CUDA_TAG}-${wheel_tag}.whl"
+torchaudio_url="${PYTORCH_WHEEL_BASE}/torchaudio-${TORCHAUDIO_VERSION}+${TORCH_CUDA_TAG}-${wheel_tag}.whl"
 
 "${PYTHON}" -m pip install --upgrade pip setuptools wheel -i "${PIP_INDEX_URL}"
 if "${PYTHON}" - <<PY
