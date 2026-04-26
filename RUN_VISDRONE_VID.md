@@ -81,6 +81,13 @@ This setup script will:
 - run runtime checks
 - stop at a ready-to-train state by default
 
+The Python dependency bootstrap now uses domestic mirrors by default:
+
+- `PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple`
+- `PYTORCH_WHEEL_BASE=https://mirrors.aliyun.com/pytorch-wheels/cu121`
+
+You can override them if your machine needs a different mirror.
+
 Useful overrides on a new server:
 
 ```bash
