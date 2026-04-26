@@ -195,6 +195,19 @@ python mbyolo_train.py \
   --name mambayolo_t_val
 ```
 
+During VisDrone-VID validation inside training, `mbyolo_train.py --task train`
+now computes tracking consistency metrics every validation epoch, alongside the
+standard detection metrics:
+
+- `metrics/IDF1`
+- `metrics/IDSwitches`
+- `metrics/Frag`
+
+These metrics are computed from the original VisDrone `annotations/` track IDs
+and ByteTrack tracks built from the current validation predictions. The original
+split root must remain available under the converted dataset root, for example
+`datasets/VisDrone-VID/raw/VisDrone2019-VID-val/annotations`.
+
 ## 5. Test-dev and Official Result Files
 
 Run test-dev validation with the trained T-model weights:
