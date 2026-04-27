@@ -16,6 +16,22 @@ from ultralytics.utils.plotting import plot_images, plot_labels, plot_results
 from ultralytics.utils.torch_utils import de_parallel, torch_distributed_zero_first
 
 
+def _plot_images_for_training_batch(batch):
+    """Return images aligned with per-sample labels/paths for training plots."""
+    images = batch["img"]
+    clip_layout = batch.get("clip_layout")
+    if clip_layout is None:
+        return images
+
+    layout = clip_layout.view(-1)
+    if len(layout) < 2:
+        return images
+    B, T = int(layout[0].item()), int(layout[1].item())
+    if B > 0 and T > 1 and images.shape[0] == B * T:
+        return images.reshape(B, T, *images.shape[1:])[:, 0].contiguous()
+    return images
+
+
 class DetectionTrainer(BaseTrainer):
     """
     A class extending the BaseTrainer class for training based on a detection model.
@@ -134,7 +150,7 @@ class DetectionTrainer(BaseTrainer):
     def plot_training_samples(self, batch, ni):
         """Plots training samples with their annotations."""
         plot_images(
-            images=batch["img"],
+            images=_plot_images_for_training_batch(batch),
             batch_idx=batch["batch_idx"],
             cls=batch["cls"].squeeze(-1),
             bboxes=batch["bboxes"],
