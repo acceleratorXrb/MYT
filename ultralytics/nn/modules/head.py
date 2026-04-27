@@ -122,12 +122,12 @@ class Detect_VID(Detect):
         self.num_ref_frames = num_ref_frames
         self.clip_layout: tuple[int, int] | None = None  # (B, T); set by trainer
         # streaming inference buffer (per detection level)
-        self._buffers: list[list[torch.Tensor]] | None = None
+        self._stream_buffers: list[list[torch.Tensor]] | None = None
 
     @torch.no_grad()
     def reset_buffer(self) -> None:
         """Clear the streaming inference buffer; call on video source switch."""
-        self._buffers = [[] for _ in range(self.nl)] if self.nl else None
+        self._stream_buffers = [[] for _ in range(self.nl)] if self.nl else None
 
     def _cv3_pre(self, i: int, x: torch.Tensor) -> torch.Tensor:
         """Run the first two Conv blocks of cv3[i] (pre-projection cls feature)."""
@@ -166,12 +166,12 @@ class Detect_VID(Detect):
 
     def _aggregate_stream(self, i: int, x_i: torch.Tensor) -> torch.Tensor:
         """Streaming-mode: input `(B, C, H, W)` (single frame). Use rolling buffer."""
-        if self._buffers is None:
+        if self._stream_buffers is None:
             self.reset_buffer()
         reg_full = self.cv2[i](x_i)
         pre_full = self._cv3_pre(i, x_i)
 
-        buf = self._buffers[i]
+        buf = self._stream_buffers[i]
         if not buf:
             cls_out = self._cv3_cls(i, pre_full)
             buf.append(pre_full.detach())

@@ -11,6 +11,7 @@ import pytest
 import torch
 
 # FAM is independent of the rest of the model graph
+from ultralytics.nn.modules.head import Detect_VID
 from ultralytics.nn.modules.yolov_fam import FeatureAggregationModule
 
 
@@ -88,6 +89,14 @@ def test_fam_conf_thr_filters_dead_refs():
     out = fam(key, refs, ref_logits)
     assert out.shape == key.shape
     assert torch.isfinite(out).all()
+
+
+def test_detect_vid_preserves_module_buffers_dict():
+    """Detect_VID streaming state must not overwrite nn.Module's internal _buffers dict."""
+    head = Detect_VID(nc=3, ch=(16, 32, 64))
+
+    assert isinstance(head._buffers, dict)
+    head.to(torch.device("cpu"))
 
 
 if __name__ == "__main__":
