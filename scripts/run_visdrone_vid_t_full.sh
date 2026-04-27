@@ -5,6 +5,7 @@ RAW_ROOT="${RAW_ROOT:-/mnt/datasets/VisDrone2019-VID-raw}"
 YOLO_ROOT="${YOLO_ROOT:-datasets/VisDrone-VID}"
 PROJECT="${PROJECT:-output_dir/visdrone_vid}"
 NAME="${NAME:-mambayolo_t}"
+MODEL_CONFIG="${MODEL_CONFIG:-ultralytics/cfg/models/mamba-yolo/Mamba-YOLO-T.yaml}"
 DATA_YAML="${DATA_YAML:-${PROJECT}/VisDrone-VID.local.yaml}"
 if [[ -z "${PYTHON:-}" ]]; then
   if [[ -x ".venv/bin/python" ]]; then
@@ -61,7 +62,7 @@ fi
 "${PYTHON}" mbyolo_train.py \
   --task train \
   --data "${DATA_YAML}" \
-  --config ultralytics/cfg/models/mamba-yolo/Mamba-YOLO-T.yaml \
+  --config "${MODEL_CONFIG}" \
   --imgsz "${IMGSZ}" \
   --batch_size "${BATCH}" \
   --epochs "${EPOCHS}" \

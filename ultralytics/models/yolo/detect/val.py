@@ -12,6 +12,10 @@ from ultralytics.utils import LOGGER, ops
 from ultralytics.utils.checks import check_requirements
 from ultralytics.utils.metrics import ConfusionMatrix, DetMetrics, box_iou
 from ultralytics.utils.plotting import output_to_target, plot_images
+from ultralytics.utils.visdrone_tracking_metrics import (
+    TRACKING_METRIC_KEYS,
+    VisDroneTrackingBenchmark,
+)
 
 
 class DetectionValidator(BaseValidator):
@@ -38,9 +42,17 @@ class DetectionValidator(BaseValidator):
         self.class_map = None
         self.args.task = "detect"
         self.metrics = DetMetrics(save_dir=self.save_dir, on_plot=self.on_plot)
+        self.tracking_benchmark = VisDroneTrackingBenchmark()
+        self.tracking_metric_keys = []
+        self.tracking_results = {}
         self.iouv = torch.linspace(0.5, 0.95, 10)  # IoU vector for mAP@0.5:0.95
         self.niou = self.iouv.numel()
         self.lb = []  # for autolabelling
+
+    @property
+    def metric_keys(self):
+        """Return detection metrics plus VisDrone-VID tracking metrics when configured."""
+        return self.metrics.keys + self.tracking_metric_keys
 
     def preprocess(self, batch):
         """Preprocesses batch of images for YOLO training."""
@@ -79,6 +91,11 @@ class DetectionValidator(BaseValidator):
         self.seen = 0
         self.jdict = []
         self.stats = dict(tp=[], conf=[], pred_cls=[], target_cls=[], target_img=[])
+        self.tracking_benchmark = VisDroneTrackingBenchmark.from_data(self.data, self.args.split)
+        self.tracking_metric_keys = TRACKING_METRIC_KEYS if self.tracking_benchmark.enabled else []
+        self.tracking_results = {}
+        if not self.tracking_benchmark.enabled and "visdrone" in str(self.data.get("path", "")).lower():
+            LOGGER.warning(f"WARNING ⚠️ skipping VisDrone tracking metrics: {self.tracking_benchmark.reason}")
 
     def get_desc(self):
         """Return a formatted string summarizing class metrics of YOLO model."""
@@ -133,6 +150,7 @@ class DetectionValidator(BaseValidator):
             stat["target_cls"] = cls
             stat["target_img"] = cls.unique()
             if npr == 0:
+                self.tracking_benchmark.add_frame_predictions(batch["im_file"][si], np.zeros((0, 6), dtype=np.float32))
                 if nl:
                     for k in self.stats.keys():
                         self.stats[k].append(stat[k])
@@ -146,6 +164,7 @@ class DetectionValidator(BaseValidator):
             predn = self._prepare_pred(pred, pbatch)
             stat["conf"] = predn[:, 4]
             stat["pred_cls"] = predn[:, 5]
+            self.tracking_benchmark.add_frame_predictions(batch["im_file"][si], predn[:, :6].cpu().numpy())
 
             # Evaluate
             if nl:
@@ -175,7 +194,11 @@ class DetectionValidator(BaseValidator):
         stats.pop("target_img", None)
         if len(stats) and stats["tp"].any():
             self.metrics.process(**stats)
-        return self.metrics.results_dict
+        results = self.metrics.results_dict
+        if self.tracking_benchmark.enabled:
+            self.tracking_results = self.tracking_benchmark.compute()
+            results.update(self.tracking_results)
+        return results
 
     def print_results(self):
         """Prints training/validation set metrics per class."""
@@ -183,6 +206,16 @@ class DetectionValidator(BaseValidator):
         LOGGER.info(pf % ("all", self.seen, self.nt_per_class.sum(), *self.metrics.mean_results()))
         if self.nt_per_class.sum() == 0:
             LOGGER.warning(f"WARNING ⚠️ no labels found in {self.args.task} set, can not compute metrics without labels")
+        if self.tracking_results:
+            LOGGER.info(
+                ("%22s" + "%11.3g" * 3)
+                % (
+                    "tracking",
+                    self.tracking_results["metrics/IDF1"],
+                    self.tracking_results["metrics/IDSwitches"],
+                    self.tracking_results["metrics/Frag"],
+                )
+            )
 
         # Print results per class
         if self.args.verbose and not self.training and self.nc > 1 and len(self.stats):

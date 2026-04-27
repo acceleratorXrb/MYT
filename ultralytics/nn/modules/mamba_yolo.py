@@ -1,6 +1,6 @@
 from .common_utils_mbyolo import *
 
-__all__ = ("VSSBlock", "SimpleStem", "VisionClueMerge", "XSSBlock")
+__all__ = ("VSSBlock", "SimpleStem", "VisionClueMerge", "XSSBlock", "SmallObjectStateGate")
 
 
 class SS2D(nn.Module):
@@ -300,6 +300,47 @@ class XSSBlock(nn.Module):
         if self.mlp_branch:
             input = input + self.drop_path(self.mlp(self.norm2(input)))
         return input
+
+
+class SmallObjectStateGate(nn.Module):
+    """Lightweight P2 detail gate guided by propagated Mamba neck semantics."""
+
+    def __init__(self, in_channels: int, out_channels: int, reduction: int = 4):
+        super().__init__()
+        hidden_channels = max(out_channels // reduction, 8)
+        self.proj = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.SiLU(),
+        )
+        self.detail = nn.Sequential(
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, groups=out_channels, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.SiLU(),
+        )
+        self.channel_gate = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(out_channels, hidden_channels, kernel_size=1),
+            nn.SiLU(),
+            nn.Conv2d(hidden_channels, out_channels, kernel_size=1),
+            nn.Sigmoid(),
+        )
+        self.spatial_gate = nn.Sequential(
+            nn.Conv2d(2, 1, kernel_size=7, padding=3, bias=False),
+            nn.Sigmoid(),
+        )
+        self.out = nn.Sequential(
+            nn.Conv2d(out_channels, out_channels, kernel_size=1, bias=False),
+            nn.BatchNorm2d(out_channels),
+        )
+        self.act = nn.SiLU()
+
+    def forward(self, x):
+        residual = self.proj(x)
+        detail = self.detail(residual)
+        spatial_context = torch.cat((detail.mean(1, keepdim=True), detail.amax(1, keepdim=True)), dim=1)
+        gate = self.channel_gate(detail) * self.spatial_gate(spatial_context)
+        return self.act(residual + self.out(detail * gate))
 
 
 class VSSBlock(nn.Module):

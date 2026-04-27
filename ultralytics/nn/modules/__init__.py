@@ -62,7 +62,7 @@ from .conv import (
     RepConv,
     SpatialAttention,
 )
-from .head import OBB, Classify, Detect, Pose, RTDETRDecoder, Segment, WorldDetect
+from .head import OBB, Classify, Detect, LightP2Detect, Pose, RTDETRDecoder, Segment, WorldDetect
 from .transformer import (
     AIFI,
     MLP,
@@ -76,7 +76,7 @@ from .transformer import (
     TransformerLayer,
 )
 
-from .mamba_yolo import SimpleStem, VisionClueMerge, VSSBlock, XSSBlock
+from .mamba_yolo import SimpleStem, SmallObjectStateGate, VisionClueMerge, VSSBlock, XSSBlock
 
 __all__ = (
     "Conv",
@@ -114,6 +114,7 @@ __all__ = (
     "BottleneckCSP",
     "Proto",
     "Detect",
+    "LightP2Detect",
     "Segment",
     "Pose",
     "Classify",
@@ -137,5 +138,5 @@ __all__ = (
     "CBFuse",
     "CBLinear",
     "Silence",
-    "SimpleStem", "VisionClueMerge", "VSSBlock", "XSSBlock"
+    "SimpleStem", "VisionClueMerge", "VSSBlock", "XSSBlock", "SmallObjectStateGate"
 )
