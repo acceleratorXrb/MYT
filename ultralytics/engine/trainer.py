@@ -51,6 +51,13 @@ from ultralytics.utils.torch_utils import (
 )
 
 
+def should_validate_epoch(args, epoch, final_epoch, possible_stop, stop):
+    """Return True when validation metrics should be computed for this epoch."""
+    val_period = max(int(getattr(args, "val_period", 1) or 1), 1)
+    periodic_val = bool(args.val) and ((epoch + 1) % val_period == 0)
+    return periodic_val or final_epoch or possible_stop or stop
+
+
 class BaseTrainer:
     """
     BaseTrainer.
@@ -420,7 +427,7 @@ class BaseTrainer:
                 self.ema.update_attr(self.model, include=["yaml", "nc", "args", "names", "stride", "class_weights"])
 
                 # Validation
-                if self.args.val or final_epoch or self.stopper.possible_stop or self.stop:
+                if should_validate_epoch(self.args, epoch, final_epoch, self.stopper.possible_stop, self.stop):
                     self.metrics, self.fitness = self.validate()
                 self.save_metrics(metrics={**self.label_loss_items(self.tloss), **self.metrics, **self.lr})
                 self.stop |= self.stopper(epoch + 1, self.fitness) or final_epoch

@@ -143,6 +143,7 @@ CFG_INT_KEYS = {  # integer-only arguments
     "line_width",
     "nbs",
     "save_period",
+    "val_period",
     "num_ref_frames",
     "clip_stride",
 }

@@ -48,6 +48,7 @@ def parse_opt():
     parser.add_argument('--device', default='0', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
     parser.add_argument('--workers', type=int, default=8, help='max dataloader workers (per RANK in DDP mode)')
     parser.add_argument('--epochs', type=int, default=300)
+    parser.add_argument('--val_period', type=int, default=10, help='validate every N epochs during training')
     parser.add_argument('--optimizer', default='SGD', help='SGD, Adam, AdamW')
     parser.add_argument('--amp', action='store_true', help='open amp')
     parser.add_argument('--project', default='output_dir/visdrone_vid', help='save to project/name')
@@ -76,6 +77,7 @@ if __name__ == '__main__':
     args = {
         "data": data,
         "epochs": opt.epochs,
+        "val_period": opt.val_period,
         "workers": opt.workers,
         "batch": opt.batch_size,
         "imgsz": opt.imgsz,
