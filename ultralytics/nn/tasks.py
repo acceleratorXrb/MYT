@@ -1020,7 +1020,7 @@ def guess_model_task(model):
         m = cfg["head"][-1][-2].lower()  # output module name
         if m in {"classify", "classifier", "cls", "fc"}:
             return "classify"
-        if m == "detect":
+        if m in {"detect", "detect_vid"}:
             return "detect"
         if m == "segment":
             return "segment"
