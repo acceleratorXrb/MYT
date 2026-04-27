@@ -32,6 +32,7 @@ from ultralytics.nn.modules import (
     Conv2,
     ConvTranspose,
     Detect,
+    Detect_VID,
     DWConv,
     DWConvTranspose2d,
     Focus,
@@ -55,7 +56,7 @@ from ultralytics.nn.modules import (
 )
 from ultralytics.utils import DEFAULT_CFG_DICT, DEFAULT_CFG_KEYS, LOGGER, colorstr, emojis, yaml_load
 from ultralytics.utils.checks import check_requirements, check_suffix, check_yaml
-from ultralytics.utils.loss import v8ClassificationLoss, v8DetectionLoss, v8OBBLoss, v8PoseLoss, v8SegmentationLoss
+from ultralytics.utils.loss import v8ClassificationLoss, v8DetectionLoss, v8OBBLoss, v8PoseLoss, v8SegmentationLoss, v8VIDDetectionLoss
 from ultralytics.utils.plotting import feature_visualization
 from ultralytics.utils.torch_utils import (
     fuse_conv_and_bn,
@@ -356,7 +357,14 @@ class DetectionModel(BaseModel):
         return y
 
     def init_criterion(self):
-        """Initialize the loss criterion for the DetectionModel."""
+        """Initialize the loss criterion for the DetectionModel.
+
+        Routes to v8VIDDetectionLoss when the head is Detect_VID, since clip-mode
+        training emits key-frame-only outputs and may grow clip-aware loss terms
+        in the future.
+        """
+        if isinstance(self.model[-1], Detect_VID):
+            return v8VIDDetectionLoss(self)
         return v8DetectionLoss(self)
 
 
@@ -927,7 +935,7 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             args = [ch[f]]
         elif m is Concat:
             c2 = sum(ch[x] for x in f)
-        elif m in {Detect, WorldDetect, Segment, Pose, OBB, ImagePoolingAttn}:
+        elif m in {Detect, Detect_VID, WorldDetect, Segment, Pose, OBB, ImagePoolingAttn}:
             args.append([ch[x] for x in f])
             if m is Segment:
                 args[2] = make_divisible(min(args[2], max_channels) * width, 8)
@@ -1044,7 +1052,7 @@ def guess_model_task(model):
                 return "pose"
             elif isinstance(m, OBB):
                 return "obb"
-            elif isinstance(m, (Detect, WorldDetect)):
+            elif isinstance(m, (Detect, WorldDetect)):  # Detect_VID inherits Detect
                 return "detect"
 
     # Guess from model filename

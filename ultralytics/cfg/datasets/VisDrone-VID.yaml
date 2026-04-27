@@ -1,0 +1,30 @@
+# VisDrone-VID 2019 dataset (video sequences) for clip-mode training.
+#
+# Expected on-disk layout (produced by tools/prepare_visdrone_vid_yolo.py):
+#   <path>/
+#     images/train/<seq>/<frame>.jpg
+#     images/val/<seq>/<frame>.jpg
+#     labels/train/<seq>/<frame>.txt
+#     labels/val/<seq>/<frame>.txt
+#
+# The `task: vid` field triggers VIDClipDataset construction in
+# ultralytics/data/build.py.
+
+path: datasets/VisDrone-VID
+train: images/train
+val: images/val
+test: images/test-dev
+
+task: vid  # triggers VIDClipDataset
+
+names:
+  0: pedestrian
+  1: people
+  2: bicycle
+  3: car
+  4: van
+  5: truck
+  6: tricycle
+  7: awning-tricycle
+  8: bus
+  9: motor

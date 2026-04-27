@@ -49,6 +49,17 @@ class DetectionValidator(BaseValidator):
         for k in ["batch_idx", "cls", "bboxes"]:
             batch[k] = batch[k].to(self.device)
 
+        # Clip-mode: VIDClipDataset emits batch["clip_layout"] = (B, T). At val
+        # we set num_ref_frames=0 so T=1 and Detect_VID falls through to the
+        # standard Detect path. Still, propagate the layout so the head knows.
+        if "clip_layout" in batch and self.model is not None:
+            from ultralytics.nn.modules import Detect_VID
+            from ultralytics.utils.torch_utils import de_parallel
+            head = de_parallel(self.model).model[-1]
+            if isinstance(head, Detect_VID):
+                cl = batch["clip_layout"].view(-1)
+                head.clip_layout = (int(cl[0].item()), int(cl[1].item()))
+
         if self.args.save_hybrid:
             height, width = batch["img"].shape[2:]
             nb = len(batch["img"])

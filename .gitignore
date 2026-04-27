@@ -6,7 +6,7 @@ __pycache__/
 .codex
 .codex/
 output_dir
-datasets/
+/datasets/
 third_party/VisDrone2018-VID-toolkit/
 ultralytics.egg-info
 docs

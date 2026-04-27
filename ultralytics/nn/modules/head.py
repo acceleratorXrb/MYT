@@ -13,8 +13,9 @@ from .block import DFL, BNContrastiveHead, ContrastiveHead, Proto
 from .conv import Conv
 from .transformer import MLP, DeformableTransformerDecoder, DeformableTransformerDecoderLayer
 from .utils import bias_init_with_prob, linear_init
+from .yolov_fam import FeatureAggregationModule
 
-__all__ = "Detect", "Segment", "Pose", "Classify", "OBB", "RTDETRDecoder"
+__all__ = "Detect", "Detect_VID", "Segment", "Pose", "Classify", "OBB", "RTDETRDecoder"
 
 
 class Detect(nn.Module):
@@ -87,6 +88,148 @@ class Detect(nn.Module):
     def decode_bboxes(self, bboxes, anchors):
         """Decode bounding boxes."""
         return dist2bbox(bboxes, anchors, xywh=True, dim=1)
+
+
+class Detect_VID(Detect):
+    """Video Detect head with cross-frame classification feature aggregation.
+
+    Inherits Detect, taps the cls branch (`cv3[i]`) between its two Conv blocks
+    and the final 1x1 projection, runs a per-scale FeatureAggregationModule on
+    the pre-projection features, then projects to class logits. Reg branch
+    (`cv2`) is unchanged. The head emits **key-frame only** outputs so the
+    downstream loss/decoder sees a regular YOLOv8-shaped tensor.
+
+    Two forward modes:
+      - Training / clip-mode val: receives `(B*T, C, H, W)` features and reads
+        `self.clip_layout = (B, T)` to slice and aggregate.
+      - Streaming inference: when `self.clip_layout` is None and `self.training`
+        is False, maintains a rolling deque of past `cv3_pre` features per
+        detection level (causal). Call `reset_buffer()` on source change.
+    """
+
+    def __init__(self, nc=80, topk=750, conf_thr=0.001, num_ref_frames=4, ch=()):
+        super().__init__(nc, ch)
+        c3 = max(ch[0], min(self.nc, 100))  # = cls feature channels per Detect.__init__
+        self.fams = nn.ModuleList(
+            FeatureAggregationModule(
+                cls_channels=c3,
+                num_ref_frames=num_ref_frames,
+                topk=topk,
+                conf_thr=conf_thr,
+            )
+            for _ in ch
+        )
+        self.num_ref_frames = num_ref_frames
+        self.clip_layout: tuple[int, int] | None = None  # (B, T); set by trainer
+        # streaming inference buffer (per detection level)
+        self._buffers: list[list[torch.Tensor]] | None = None
+
+    @torch.no_grad()
+    def reset_buffer(self) -> None:
+        """Clear the streaming inference buffer; call on video source switch."""
+        self._buffers = [[] for _ in range(self.nl)] if self.nl else None
+
+    def _cv3_pre(self, i: int, x: torch.Tensor) -> torch.Tensor:
+        """Run the first two Conv blocks of cv3[i] (pre-projection cls feature)."""
+        s = self.cv3[i]
+        return s[1](s[0](x))
+
+    def _cv3_cls(self, i: int, pre: torch.Tensor) -> torch.Tensor:
+        """Run the final 1x1 projection of cv3[i]."""
+        return self.cv3[i][2](pre)
+
+    def _aggregate_clip(self, i: int, x_i: torch.Tensor, B: int, T: int) -> torch.Tensor:
+        """Clip-mode: input `(B*T, C, H, W)`, output key-frame `(B, no, H, W)`."""
+        reg_full = self.cv2[i](x_i)                                 # (B*T, 4*reg_max, H, W)
+        pre_full = self._cv3_pre(i, x_i)                            # (B*T, c3, H, W)
+
+        if T <= 1:
+            cls_out = self._cv3_cls(i, pre_full)
+            return torch.cat((reg_full, cls_out), 1)
+
+        # reshape to (B, T, ...)
+        Cp, H, W = pre_full.shape[1:]
+        pre_clip = pre_full.view(B, T, Cp, H, W)
+        cls_full = self._cv3_cls(i, pre_full)                       # (B*T, nc, H, W)
+        cls_clip = cls_full.view(B, T, self.nc, H, W)
+
+        key_pre = pre_clip[:, 0]                                    # (B, c3, H, W)
+        ref_pre = pre_clip[:, 1:]                                   # (B, T-1, c3, H, W)
+        ref_logits = cls_clip[:, 1:]                                # (B, T-1, nc, H, W)
+
+        agg_pre = self.fams[i](key_pre, ref_pre, ref_logits)        # (B, c3, H, W)
+        cls_out = self._cv3_cls(i, agg_pre)                         # (B, nc, H, W)
+
+        Cr = reg_full.shape[1]
+        reg_key = reg_full.view(B, T, Cr, H, W)[:, 0]               # (B, 4*reg_max, H, W)
+        return torch.cat((reg_key, cls_out), 1)
+
+    def _aggregate_stream(self, i: int, x_i: torch.Tensor) -> torch.Tensor:
+        """Streaming-mode: input `(B, C, H, W)` (single frame). Use rolling buffer."""
+        if self._buffers is None:
+            self.reset_buffer()
+        reg_full = self.cv2[i](x_i)
+        pre_full = self._cv3_pre(i, x_i)
+
+        buf = self._buffers[i]
+        if not buf:
+            cls_out = self._cv3_cls(i, pre_full)
+            buf.append(pre_full.detach())
+            return torch.cat((reg_full, cls_out), 1)
+
+        # ref features = entire buffer; build (B, R, C, H, W) and (B, R, nc, H, W)
+        ref_pre = torch.stack(buf, dim=1)                           # (B, R, C, H, W)
+        B, R, Cp, H, W = ref_pre.shape
+        ref_logits = self._cv3_cls(i, ref_pre.view(B * R, Cp, H, W)).view(B, R, self.nc, H, W)
+
+        agg_pre = self.fams[i](pre_full, ref_pre, ref_logits)
+        cls_out = self._cv3_cls(i, agg_pre)
+
+        # push current pre into buffer (capped)
+        buf.append(pre_full.detach())
+        if len(buf) > self.num_ref_frames:
+            buf.pop(0)
+        return torch.cat((reg_full, cls_out), 1)
+
+    def forward(self, x):
+        """Detect_VID forward: clip-mode if clip_layout set, else streaming."""
+        if self.clip_layout is not None:
+            B, T = self.clip_layout
+        else:
+            B, T = x[0].shape[0], 1
+
+        for i in range(self.nl):
+            if T > 1 or self.training:
+                x[i] = self._aggregate_clip(i, x[i], B, T)
+            else:
+                x[i] = self._aggregate_stream(i, x[i])
+
+        if self.training:
+            return x
+
+        # Inference path — same as Detect but on key-frame-only x[i]
+        shape = x[0].shape  # (B, no, H, W)
+        x_cat = torch.cat([xi.view(shape[0], self.no, -1) for xi in x], 2)
+        if self.dynamic or self.shape != shape:
+            self.anchors, self.strides = (z.transpose(0, 1) for z in make_anchors(x, self.stride, 0.5))
+            self.shape = shape
+
+        if self.export and self.format in {"saved_model", "pb", "tflite", "edgetpu", "tfjs"}:
+            box = x_cat[:, : self.reg_max * 4]
+            cls = x_cat[:, self.reg_max * 4 :]
+        else:
+            box, cls = x_cat.split((self.reg_max * 4, self.nc), 1)
+
+        if self.export and self.format in {"tflite", "edgetpu"}:
+            grid_h, grid_w = shape[2], shape[3]
+            grid_size = torch.tensor([grid_w, grid_h, grid_w, grid_h], device=box.device).reshape(1, 4, 1)
+            norm = self.strides / (self.stride[0] * grid_size)
+            dbox = self.decode_bboxes(self.dfl(box) * norm, self.anchors.unsqueeze(0) * norm[:, :2])
+        else:
+            dbox = self.decode_bboxes(self.dfl(box), self.anchors.unsqueeze(0)) * self.strides
+
+        y = torch.cat((dbox, cls.sigmoid()), 1)
+        return y if self.export else (y, x)
 
 
 class Segment(Detect):

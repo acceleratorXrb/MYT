@@ -55,8 +55,19 @@ class DetectionTrainer(BaseTrainer):
         return build_dataloader(dataset, batch_size, workers, shuffle, rank)  # return dataloader
 
     def preprocess_batch(self, batch):
-        """Preprocesses a batch of images by scaling and converting to float."""
+        """Preprocesses a batch of images by scaling and converting to float.
+
+        For clip-mode (VIDClipDataset), `batch["img"]` is already flattened to
+        `(B*T, 3, H, W)` and `batch["clip_layout"]` carries `(B, T)`. Propagate
+        the layout to the Detect_VID head so it can slice / aggregate.
+        """
         batch["img"] = batch["img"].to(self.device, non_blocking=True).float() / 255
+        if "clip_layout" in batch:
+            from ultralytics.nn.modules import Detect_VID
+            head = de_parallel(self.model).model[-1]
+            if isinstance(head, Detect_VID):
+                cl = batch["clip_layout"].view(-1)
+                head.clip_layout = (int(cl[0].item()), int(cl[1].item()))
         if self.args.multi_scale:
             imgs = batch["img"]
             sz = (

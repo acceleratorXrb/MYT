@@ -248,6 +248,18 @@ class v8DetectionLoss:
         return loss.sum() * batch_size, loss.detach()  # loss(box, cls, dfl)
 
 
+class v8VIDDetectionLoss(v8DetectionLoss):
+    """Detection loss for clip-mode training with the Detect_VID head.
+
+    The Detect_VID head emits key-frame-only outputs (shape `(B, no, H, W)`),
+    so the underlying detection loss math is unchanged. This subclass exists
+    as a routing marker and a future hook point for adding clip-aware terms
+    (e.g. KL between aggregated and non-aggregated key cls logits).
+    """
+
+    pass
+
+
 class v8SegmentationLoss(v8DetectionLoss):
     """Criterion class for computing training losses."""
 

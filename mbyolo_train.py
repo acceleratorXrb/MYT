@@ -59,6 +59,10 @@ def parse_opt():
     parser.add_argument('--resume', action='store_true', help='resume training from the last checkpoint')
     parser.add_argument('--half', action='store_true', help='use FP16 half-precision inference')
     parser.add_argument('--dnn', action='store_true', help='use OpenCV DNN for ONNX inference')
+    # VID clip-mode (consumed by VIDClipDataset when data yaml has task: vid)
+    parser.add_argument('--num_ref_frames', type=int, default=4, help='reference frames per clip for VIDClipDataset (0 disables FAM)')
+    parser.add_argument('--clip_stride', type=int, default=1, help='temporal stride between sampled refs')
+    parser.add_argument('--ref_sample', default='uniform_local', choices=['uniform_local', 'uniform_global'], help='ref-frame sampling strategy')
     opt = parser.parse_args()
     return opt
 
@@ -80,6 +84,10 @@ if __name__ == '__main__':
         "amp": opt.amp,
         "project": resolve_path(opt.project),
         "name": opt.name,
+        # VID clip-mode params (ignored by non-VID datasets)
+        "num_ref_frames": opt.num_ref_frames,
+        "clip_stride": opt.clip_stride,
+        "ref_sample": opt.ref_sample,
     }
     model_path = resolve_path(opt.weights) if opt.weights else resolve_path(opt.config)
     model = YOLO(model_path)
