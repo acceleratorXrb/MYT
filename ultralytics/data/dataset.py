@@ -42,6 +42,57 @@ from .utils import (
 DATASET_CACHE_VERSION = "1.0.3"
 
 
+def _load_track_rows(track_file):
+    rows = defaultdict(list)
+    if not track_file.is_file():
+        return rows
+    with track_file.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            fields = line.split(",")
+            if len(fields) < 7:
+                continue
+            frame_id = int(float(fields[0]))
+            track_id = int(float(fields[1]))
+            cls = int(float(fields[2]))
+            bbox = tuple(round(float(v), 6) for v in fields[3:7])
+            rows[frame_id].append((track_id, cls, bbox))
+    return rows
+
+
+def _attach_track_ids(labels):
+    track_cache = {}
+    for label in labels:
+        im_file = Path(label["im_file"])
+        parts = im_file.parts
+        if "images" not in parts:
+            label["track_ids"] = np.full((len(label["cls"]),), -1, dtype=np.int64)
+            continue
+        image_index = parts.index("images")
+        if image_index + 2 >= len(parts):
+            label["track_ids"] = np.full((len(label["cls"]),), -1, dtype=np.int64)
+            continue
+        split, sequence = parts[image_index + 1], parts[image_index + 2]
+        dataset_root = Path(*parts[:image_index]) if image_index else Path(".")
+        track_file = dataset_root / "tracks" / split / f"{sequence}.txt"
+        rows = track_cache.setdefault(track_file, _load_track_rows(track_file))
+        frame_stem = im_file.stem
+        frame_id = int(frame_stem) if frame_stem.isdigit() else None
+        candidates = rows.get(frame_id, []) if frame_id is not None else []
+        track_ids = []
+        for cls, bbox in zip(label["cls"].reshape(-1), label["bboxes"]):
+            rounded_bbox = tuple(round(float(v), 6) for v in bbox)
+            match = next(
+                (tid for tid, row_cls, row_bbox in candidates if row_cls == int(cls) and row_bbox == rounded_bbox),
+                -1,
+            )
+            track_ids.append(match)
+        label["track_ids"] = np.asarray(track_ids, dtype=np.int64)
+    return labels
+
+
 class YOLODataset(BaseDataset):
     """
     Dataset class for loading object detection and/or segmentation labels in YOLO format.
@@ -169,7 +220,7 @@ class YOLODataset(BaseDataset):
                 lb["segments"] = []
         if len_cls == 0:
             LOGGER.warning(f"WARNING ⚠️ No labels found in {cache_path}, training may not work correctly. {HELP_URL}")
-        return labels
+        return _attach_track_ids(labels)
 
     def build_transforms(self, hyp=None):
         """Builds and appends transforms to the list."""
@@ -236,7 +287,7 @@ class YOLODataset(BaseDataset):
             value = values[i]
             if k == "img":
                 value = torch.stack(value, 0)
-            if k in {"masks", "keypoints", "bboxes", "cls", "segments", "obb"}:
+            if k in {"masks", "keypoints", "bboxes", "cls", "segments", "obb", "track_ids"}:
                 value = torch.cat(value, 0)
             new_batch[k] = value
         new_batch["batch_idx"] = list(new_batch["batch_idx"])

@@ -177,6 +177,10 @@ class BOTSORT(BYTETracker):
     def get_dists(self, tracks, detections):
         """Get distances between tracks and detections using IoU and (optionally) ReID embeddings."""
         dists = matching.iou_distance(tracks, detections)
+        if getattr(self.args, "class_aware", False) and len(tracks) and len(detections):
+            track_cls = np.asarray([track.cls for track in tracks]).reshape(-1, 1)
+            det_cls = np.asarray([det.cls for det in detections]).reshape(1, -1)
+            dists = np.where(track_cls == det_cls, dists, 1.0)
         dists_mask = dists > self.proximity_thresh
 
         # TODO: mot20

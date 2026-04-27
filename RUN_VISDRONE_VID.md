@@ -231,6 +231,56 @@ The official root must be the original VisDrone-VID split directory with
 The wrapper also checks that every official sequence has a corresponding result
 TXT before it tries to launch the toolkit.
 
+## 6. Tracking ID Metrics
+
+The tracking path does not use external ReID weights. It uses the VisDrone
+sequence annotations preserved by `tools/prepare_visdrone_vid_yolo.py` under
+`tracks/<split>/` plus the Mamba-YOLO detector outputs.
+
+Train with the tracking config entry point:
+
+```bash
+python mbyolo_train.py \
+  --task train_track \
+  --data output_dir/visdrone_vid/VisDrone-VID.local.yaml \
+  --config ultralytics/cfg/models/mamba-yolo/Mamba-YOLO-T-Track.yaml \
+  --imgsz 640 \
+  --batch_size 16 \
+  --epochs 100 \
+  --workers 8 \
+  --device 0 \
+  --amp \
+  --project output_dir/visdrone_vid \
+  --name mambayolo_t_track
+```
+
+Export per-sequence tracking result files with non-negative predicted IDs:
+
+```bash
+python mbyolo_train.py \
+  --task track_export \
+  --weights output_dir/visdrone_vid/mambayolo_t_track/weights/best.pt \
+  --official_root datasets/VisDrone-VID/raw/VisDrone2019-VID-val \
+  --out output_dir/visdrone_vid/mambayolo_t_track_val_tracks \
+  --tracker ultralytics/cfg/trackers/mambayolo_visdrone_track.yaml \
+  --imgsz 640 \
+  --device 0
+```
+
+Evaluate local ID metrics on the val split:
+
+```bash
+python mbyolo_train.py \
+  --task mot_eval \
+  --official_root datasets/VisDrone-VID/raw/VisDrone2019-VID-val \
+  --results output_dir/visdrone_vid/mambayolo_t_track_val_tracks \
+  --out output_dir/visdrone_vid/mambayolo_t_track_val_mot.json
+```
+
+The local MOT evaluator reports `IDF1`, `IDP`, `IDR`, `ID Switches`, and
+`Frag`. Test-dev has no public GT in this workflow, so use `track_export` for
+submission files and val for measurable ID metrics.
+
 The full T-model pipeline is wrapped in:
 
 ```bash

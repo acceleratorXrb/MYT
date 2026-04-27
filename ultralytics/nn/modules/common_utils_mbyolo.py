@@ -14,18 +14,24 @@ try:
     import selective_scan_cuda_ndstate
     import selective_scan_cuda_nrow
     import selective_scan_cuda
-except:
-    pass
+except Exception:
+    selective_scan_cuda_core = None
 
 try:
     "sscore acts the same as mamba_ssm"
     import selective_scan_cuda_core
-except Exception as e:
-    print(e, flush=True)
+except Exception:
     "you should install mamba_ssm to use this"
     SSMODE = "mamba_ssm"
-    import selective_scan_cuda
     # from mamba_ssm.ops.selective_scan_interface import selective_scan_fn, selective_scan_ref
+
+
+def _require_selective_scan_cuda():
+    if selective_scan_cuda_core is None:
+        raise ModuleNotFoundError(
+            "selective_scan CUDA extensions are required to run Mamba-YOLO selective scan. "
+            "Build them with `cd selective_scan && pip install .` before training or inference."
+        )
 
 
 class LayerNorm2d(nn.Module):
@@ -103,6 +109,7 @@ class SelectiveScanCore(torch.autograd.Function):
     @torch.cuda.amp.custom_fwd
     def forward(ctx, u, delta, A, B, C, D=None, delta_bias=None, delta_softplus=False, nrows=1, backnrows=1,
                 oflex=True):
+        _require_selective_scan_cuda()
         # all in float
         if u.stride(-1) != 1:
             u = u.contiguous()

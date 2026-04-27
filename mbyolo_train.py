@@ -54,6 +54,16 @@ def parse_opt():
     parser.add_argument('--name', default='mambayolo_t', help='save to project/name')
     parser.add_argument('--source', type=str, default='', help='source path for predict')
     parser.add_argument('--format', type=str, default='onnx', help='export format')
+    parser.add_argument(
+        '--tracker',
+        default='ultralytics/cfg/trackers/mambayolo_visdrone_track.yaml',
+        help='tracker yaml path',
+    )
+    parser.add_argument('--official_root', type=str, default='', help='official VisDrone split root for track_export')
+    parser.add_argument('--results', type=str, default='', help='tracking results directory for mot_eval')
+    parser.add_argument('--out', type=str, default='', help='output path/directory for tracking tasks')
+    parser.add_argument('--conf', type=float, default=0.1, help='confidence threshold for tracking/export')
+    parser.add_argument('--iou', type=float, default=0.7, help='IoU threshold for NMS or MOT matching')
     parser.add_argument('--save_txt', action='store_true', help='save prediction txt labels')
     parser.add_argument('--save_conf', action='store_true', help='save prediction confidences')
     parser.add_argument('--resume', action='store_true', help='resume training from the last checkpoint')
@@ -65,9 +75,54 @@ def parse_opt():
 
 if __name__ == '__main__':
     opt = parse_opt()
-    from ultralytics import YOLO
 
     task = opt.task.lower()
+    if task == "mot_eval":
+        from tools.eval_visdrone_vid_mot import evaluate_mot
+
+        gt_root = opt.official_root or opt.source
+        if not gt_root:
+            raise ValueError("--official_root or --source is required for task=mot_eval")
+        results = opt.results or opt.out
+        if not results:
+            raise ValueError("--results or --out is required for task=mot_eval")
+        gt_root = Path(resolve_path(gt_root))
+        gt_dir = gt_root / "annotations" if (gt_root / "annotations").is_dir() else gt_root
+        metrics = evaluate_mot(gt_dir, Path(resolve_path(results)), iou_threshold=opt.iou)
+        out = (
+            Path(resolve_path(opt.out))
+            if opt.out
+            else Path(resolve_path(opt.project)) / f"{opt.name}_mot_metrics.json"
+        )
+        out.parent.mkdir(parents=True, exist_ok=True)
+        import json
+
+        out.write_text(json.dumps({"metrics": metrics}, indent=2) + "\n", encoding="utf-8")
+        print(json.dumps({"metrics": metrics, "out": str(out)}, indent=2))
+        raise SystemExit(0)
+    if task == "track_export":
+        from tools.export_visdrone_vid_tracks import export_tracks
+
+        if not opt.weights:
+            raise ValueError("--weights is required for task=track_export")
+        source = opt.official_root or opt.source
+        if not source:
+            raise ValueError("--official_root or --source is required for task=track_export")
+        out = opt.out or os.path.join(opt.project, f"{opt.name}_tracks")
+        export_tracks(
+            weights=Path(resolve_path(opt.weights)),
+            source=Path(resolve_path(source)),
+            out=Path(resolve_path(out)),
+            tracker=Path(resolve_path(opt.tracker)),
+            imgsz=opt.imgsz,
+            device=opt.device,
+            conf=opt.conf,
+            iou=opt.iou,
+        )
+        raise SystemExit(0)
+
+    from ultralytics import YOLO
+
     data = resolve_dataset_yaml(opt.data, opt.project)
     args = {
         "data": data,
@@ -83,8 +138,25 @@ if __name__ == '__main__':
     }
     model_path = resolve_path(opt.weights) if opt.weights else resolve_path(opt.config)
     model = YOLO(model_path)
-    if task == "train":
+    if task in {"train", "train_track"}:
         args["resume"] = opt.resume
+        if task == "train_track":
+            args["pretrained"] = False
+            args["tracker"] = resolve_path(opt.tracker)
+            args.update(
+                {
+                    "mosaic": 0.0,
+                    "mixup": 0.0,
+                    "copy_paste": 0.0,
+                    "degrees": 0.0,
+                    "translate": 0.0,
+                    "scale": 0.0,
+                    "shear": 0.0,
+                    "perspective": 0.0,
+                    "fliplr": 0.0,
+                    "flipud": 0.0,
+                }
+            )
         model.train(**args)
     elif task == "val":
         model.val(**args)
@@ -107,4 +179,7 @@ if __name__ == '__main__':
     elif task == "export":
         model.export(format=opt.format, imgsz=opt.imgsz, device=opt.device, half=opt.half)
     else:
-        raise ValueError(f"Unsupported task: {opt.task}. Expected one of: train, val, test, predict, export.")
+        raise ValueError(
+            f"Unsupported task: {opt.task}. Expected one of: train, train_track, val, test, predict, export, "
+            "track_export, mot_eval."
+        )

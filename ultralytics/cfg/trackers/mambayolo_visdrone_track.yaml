@@ -1,0 +1,19 @@
+# VisDrone-VID tracker settings for Mamba-YOLO-T without external ReID weights.
+
+tracker_type: botsort
+track_high_thresh: 0.35
+track_low_thresh: 0.05
+new_track_thresh: 0.45
+track_buffer: 60
+match_thresh: 0.85
+class_aware: True
+
+gmc_method: sparseOptFlow
+proximity_thresh: 0.5
+appearance_thresh: 0.25
+with_reid: False
+
+# Experiment metadata. Ultralytics ignores unknown keys in tracker matching.
+id_loss_weight: 0.25
+pair_gap: 3
+external_pretrained: False

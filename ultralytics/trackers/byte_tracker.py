@@ -375,6 +375,10 @@ class BYTETracker:
     def get_dists(self, tracks, detections):
         """Calculates the distance between tracks and detections using IoU and fuses scores."""
         dists = matching.iou_distance(tracks, detections)
+        if getattr(self.args, "class_aware", False) and len(tracks) and len(detections):
+            track_cls = np.asarray([track.cls for track in tracks]).reshape(-1, 1)
+            det_cls = np.asarray([det.cls for det in detections]).reshape(1, -1)
+            dists = np.where(track_cls == det_cls, dists, 1.0)
         # TODO: mot20
         # if not self.args.mot20:
         dists = matching.fuse_score(dists, detections)

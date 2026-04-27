@@ -2,6 +2,7 @@
 """Convert VisDrone2019-VID sequences to Ultralytics YOLO detection layout."""
 
 import argparse
+import json
 import os
 import shutil
 from collections import defaultdict
@@ -146,15 +147,16 @@ def read_annotations(annotation_file, frame_count):
                 raise ValueError(f"{annotation_file}:{line_no} has {len(fields)} fields, expected at least 10.")
 
             frame_index = int(float(fields[0]))
+            track_id = int(float(fields[1]))
             left, top, box_width, box_height = (float(fields[i]) for i in range(2, 6))
             score = float(fields[6])
             category = int(float(fields[7]))
 
             if frame_index < 1 or frame_index > frame_count:
                 continue
-            if score <= 0 or category not in CATEGORY_TO_YOLO or box_width <= 0 or box_height <= 0:
+            if score <= 0 or track_id < 0 or category not in CATEGORY_TO_YOLO or box_width <= 0 or box_height <= 0:
                 continue
-            by_frame[frame_index].append((CATEGORY_TO_YOLO[category], left, top, box_width, box_height))
+            by_frame[frame_index].append((track_id, CATEGORY_TO_YOLO[category], left, top, box_width, box_height))
     return by_frame
 
 
@@ -171,12 +173,14 @@ def convert_split(src, out, split, copy, overwrite):
 
     image_total = 0
     label_total = 0
+    track_records = []
     for seq_dir in sequences:
         frames = sorted(p for p in seq_dir.iterdir() if p.suffix.lower() in IMAGE_SUFFIXES)
         if not frames:
             continue
 
         annotations = read_annotations(ann_root / f"{seq_dir.name}.txt", len(frames))
+        track_lines = []
         for frame_index, frame_path in enumerate(frames, start=1):
             rel_frame = Path(seq_dir.name) / frame_path.name
             out_image = out / "images" / split / rel_frame
@@ -187,16 +191,39 @@ def convert_split(src, out, split, copy, overwrite):
 
             width, height = image_size(frame_path)
             lines = []
-            for cls, left, top, box_width, box_height in annotations.get(frame_index, []):
+            for track_id, cls, left, top, box_width, box_height in annotations.get(frame_index, []):
                 x, y, w, h = convert_box(width, height, left, top, box_width, box_height)
                 x, y, w, h = (min(max(v, 0.0), 1.0) for v in (x, y, w, h))
                 lines.append(f"{cls} {x:.6f} {y:.6f} {w:.6f} {h:.6f}\n")
+                track_lines.append(f"{frame_index},{track_id},{cls},{x:.6f},{y:.6f},{w:.6f},{h:.6f}\n")
+                track_records.append(
+                    {
+                        "sequence_id": seq_dir.name,
+                        "frame_id": frame_index,
+                        "image": str(Path("images") / split / rel_frame).replace("\\", "/"),
+                        "track_id": track_id,
+                        "cls": cls,
+                        "bbox": [round(float(v), 6) for v in (x, y, w, h)],
+                    }
+                )
 
             if overwrite or not out_label.exists():
                 out_label.write_text("".join(lines), encoding="utf-8")
             image_total += 1
             label_total += len(lines)
 
+        out_track = out / "tracks" / split / f"{seq_dir.name}.txt"
+        out_track.parent.mkdir(parents=True, exist_ok=True)
+        if overwrite or not out_track.exists():
+            out_track.write_text("".join(track_lines), encoding="utf-8")
+
+    manifest = out / "tracks" / f"{split}.jsonl"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    if overwrite or not manifest.exists():
+        manifest.write_text(
+            "".join(json.dumps(record, sort_keys=True) + "\n" for record in track_records),
+            encoding="utf-8",
+        )
     return image_total, label_total
 
 

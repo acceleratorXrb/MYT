@@ -1034,6 +1034,10 @@ class Format:
         labels["img"] = self._format_img(img)
         labels["cls"] = torch.from_numpy(cls) if nl else torch.zeros(nl)
         labels["bboxes"] = torch.from_numpy(instances.bboxes) if nl else torch.zeros((nl, 4))
+        if "track_ids" in labels:
+            labels["track_ids"] = (
+                torch.as_tensor(labels["track_ids"], dtype=torch.long) if nl else torch.zeros(nl, dtype=torch.long)
+            )
         if self.return_keypoint:
             labels["keypoints"] = torch.from_numpy(instances.keypoints)
             if self.normalize:
