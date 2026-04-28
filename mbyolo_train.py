@@ -1,6 +1,9 @@
 import argparse
+import json
 import os
 from pathlib import Path
+import subprocess
+import sys
 
 import yaml
 
@@ -9,6 +12,189 @@ ROOT = os.path.abspath('.') + "/"
 
 def resolve_path(path):
     return path if os.path.isabs(path) else os.path.join(ROOT, path)
+
+
+def run_extra_eval_step(name, cmd, strict):
+    cmd = [str(x) for x in cmd]
+    print(f"[extra-eval] {name}: {' '.join(map(str, cmd))}", flush=True)
+    completed = subprocess.run(cmd, cwd=ROOT)
+    ok = completed.returncode == 0
+    if not ok:
+        message = f"[extra-eval] {name} failed with exit code {completed.returncode}"
+        if strict:
+            raise RuntimeError(message)
+        print(message, flush=True)
+    return {"name": name, "ok": ok, "returncode": completed.returncode, "cmd": cmd}
+
+
+def build_extra_eval_callback(opt):
+    period = max(int(opt.extra_eval_period), 0)
+    official_root = Path(resolve_path(opt.extra_eval_official_root))
+    toolkit = Path(resolve_path(opt.extra_eval_toolkit))
+    tracker = Path(resolve_path(opt.extra_eval_tracker))
+    strict = bool(opt.extra_eval_strict)
+
+    def on_model_save(trainer):
+        if period <= 0:
+            return
+        epoch = int(trainer.epoch) + 1
+        if epoch % period != 0:
+            return
+
+        weights = Path(trainer.last)
+        if not weights.exists():
+            message = f"[extra-eval] skipping epoch {epoch}: checkpoint not found at {weights}"
+            if strict:
+                raise FileNotFoundError(message)
+            print(message, flush=True)
+            return
+
+        if not (official_root / "annotations").is_dir() or not (official_root / "sequences").is_dir():
+            message = (
+                f"[extra-eval] skipping epoch {epoch}: official root must contain annotations/ and sequences/: "
+                f"{official_root}"
+            )
+            if strict:
+                raise FileNotFoundError(message)
+            print(message, flush=True)
+            return
+
+        out_root = Path(trainer.save_dir) / "extra_eval" / f"epoch{epoch:03d}"
+        detections_dir = out_root / "detections"
+        tracks_dir = out_root / "tracks"
+        official_out = out_root / "official_eval"
+        flicker_json = out_root / "flicker.json"
+        mot_json = out_root / "mot.json"
+        summary_json = out_root / "summary.json"
+        out_root.mkdir(parents=True, exist_ok=True)
+
+        steps = []
+        py = sys.executable
+        scripts = Path(ROOT) / "tools"
+
+        try:
+            steps.append(
+                run_extra_eval_step(
+                    "export_detections",
+                    [
+                        py,
+                        scripts / "export_visdrone_vid_results.py",
+                        "--weights",
+                        weights,
+                        "--source",
+                        official_root,
+                        "--out",
+                        detections_dir,
+                        "--imgsz",
+                        opt.imgsz,
+                        "--batch",
+                        opt.extra_eval_batch,
+                        "--device",
+                        opt.device,
+                        "--conf",
+                        opt.extra_eval_conf,
+                        "--iou",
+                        opt.extra_eval_iou,
+                    ],
+                    strict,
+                )
+            )
+            if toolkit.exists():
+                steps.append(
+                    run_extra_eval_step(
+                        "official_eval",
+                        [
+                            py,
+                            scripts / "eval_visdrone_vid_official.py",
+                            "--toolkit",
+                            toolkit,
+                            "--official-root",
+                            official_root,
+                            "--results",
+                            detections_dir,
+                            "--out",
+                            official_out,
+                        ],
+                        strict,
+                    )
+                )
+            else:
+                message = f"[extra-eval] official_eval skipped: toolkit not found at {toolkit}"
+                if strict:
+                    raise FileNotFoundError(message)
+                print(message, flush=True)
+                steps.append({"name": "official_eval", "ok": False, "skipped": True, "reason": message})
+
+            steps.append(
+                run_extra_eval_step(
+                    "flicker",
+                    [
+                        py,
+                        scripts / "eval_visdrone_vid_cls_flicker.py",
+                        "--gt",
+                        official_root / "annotations",
+                        "--pred",
+                        detections_dir,
+                        "--out",
+                        flicker_json,
+                    ],
+                    strict,
+                )
+            )
+            steps.append(
+                run_extra_eval_step(
+                    "export_tracks",
+                    [
+                        py,
+                        scripts / "export_visdrone_vid_tracks.py",
+                        "--weights",
+                        weights,
+                        "--source",
+                        official_root,
+                        "--out",
+                        tracks_dir,
+                        "--tracker",
+                        tracker,
+                        "--imgsz",
+                        opt.imgsz,
+                        "--device",
+                        opt.device,
+                        "--conf",
+                        opt.extra_eval_track_conf,
+                        "--iou",
+                        opt.extra_eval_iou,
+                    ],
+                    strict,
+                )
+            )
+            steps.append(
+                run_extra_eval_step(
+                    "mot",
+                    [
+                        py,
+                        scripts / "eval_visdrone_vid_mot.py",
+                        "--gt",
+                        official_root / "annotations",
+                        "--pred",
+                        tracks_dir,
+                        "--out",
+                        mot_json,
+                    ],
+                    strict,
+                )
+            )
+        finally:
+            payload = {
+                "epoch": epoch,
+                "weights": str(weights),
+                "official_root": str(official_root),
+                "out_root": str(out_root),
+                "steps": steps,
+            }
+            summary_json.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+            print(f"[extra-eval] epoch {epoch} summary saved to {summary_json}", flush=True)
+
+    return on_model_save
 
 
 def resolve_dataset_yaml(path, project):
@@ -64,6 +250,16 @@ def parse_opt():
     parser.add_argument('--num_ref_frames', type=int, default=4, help='reference frames per clip for VIDClipDataset (0 disables FAM)')
     parser.add_argument('--clip_stride', type=int, default=1, help='temporal stride between sampled refs')
     parser.add_argument('--ref_sample', default='uniform_local', choices=['uniform_local', 'uniform_global'], help='ref-frame sampling strategy')
+    # Optional heavier video metrics, run after checkpoint save every N epochs.
+    parser.add_argument('--extra_eval_period', type=int, default=0, help='run official/flicker/MOT video eval every N epochs; 0 disables')
+    parser.add_argument('--extra_eval_official_root', default='datasets/VisDrone-VID/raw/VisDrone2019-VID-val', help='official VisDrone-VID split root with annotations/ and sequences/')
+    parser.add_argument('--extra_eval_toolkit', default='third_party/VisDrone2018-VID-toolkit', help='official VisDrone VID toolkit path')
+    parser.add_argument('--extra_eval_tracker', default='ultralytics/cfg/trackers/bytetrack.yaml', help='tracker yaml for MOT export')
+    parser.add_argument('--extra_eval_batch', type=int, default=16, help='batch size for detection export during extra eval')
+    parser.add_argument('--extra_eval_conf', type=float, default=0.001, help='confidence threshold for official detection export')
+    parser.add_argument('--extra_eval_track_conf', type=float, default=0.1, help='confidence threshold for tracking export')
+    parser.add_argument('--extra_eval_iou', type=float, default=0.7, help='NMS IoU threshold for extra eval exports')
+    parser.add_argument('--extra_eval_strict', action='store_true', help='fail training if an extra-eval step fails')
     opt = parser.parse_args()
     return opt
 
@@ -94,6 +290,8 @@ if __name__ == '__main__':
     model_path = resolve_path(opt.weights) if opt.weights else resolve_path(opt.config)
     model = YOLO(model_path)
     if task == "train":
+        if opt.extra_eval_period > 0:
+            model.add_callback("on_model_save", build_extra_eval_callback(opt))
         args["resume"] = opt.resume
         model.train(**args)
     elif task == "val":
