@@ -93,7 +93,8 @@ python mbyolo_train.py \
 ```
 
 额外评测会保存到 `output_dir/visdrone_vid/yolov_t_R4/extra_eval/epochXXX/`，包括
-VisDrone 官方 AP/AR、cls flicker、ByteTrack 轨迹导出和 MOT identity 指标。
+cls flicker、ByteTrack 轨迹导出和 MOT identity 指标；训练过程中不再自动运行 CPU-only
+的 VisDrone 官方 AP/AR。
 
 显存提示：`B=2, T=5 (1 key + 4 ref), imgsz=640` 在 24 GB 卡上约 14 GB。如果 OOM：
 

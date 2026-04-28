@@ -179,9 +179,9 @@ python mbyolo_train.py \
   --extra_eval_official_root datasets/VisDrone-VID/raw/VisDrone2019-VID-val
 ```
 
-Every third epoch, this exports detections, runs the official VisDrone AP/AR
-wrapper when the toolkit is available, computes classification flicker, exports
-ByteTrack tracks, and computes the MOT identity metrics. Results are saved under
+Every third epoch, this exports detections, computes classification flicker,
+exports ByteTrack tracks, and computes the MOT identity metrics. It does not run
+the CPU-only official VisDrone AP/AR toolkit during training. Results are saved under
 `output_dir/visdrone_vid/mambayolo_t/extra_eval/epochXXX/`.
 
 ## 4. Validate

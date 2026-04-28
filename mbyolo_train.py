@@ -30,7 +30,6 @@ def run_extra_eval_step(name, cmd, strict):
 def build_extra_eval_callback(opt):
     period = max(int(opt.extra_eval_period), 0)
     official_root = Path(resolve_path(opt.extra_eval_official_root))
-    toolkit = Path(resolve_path(opt.extra_eval_toolkit))
     tracker = Path(resolve_path(opt.extra_eval_tracker))
     strict = bool(opt.extra_eval_strict)
 
@@ -62,7 +61,6 @@ def build_extra_eval_callback(opt):
         out_root = Path(trainer.save_dir) / "extra_eval" / f"epoch{epoch:03d}"
         detections_dir = out_root / "detections"
         tracks_dir = out_root / "tracks"
-        official_out = out_root / "official_eval"
         flicker_json = out_root / "flicker.json"
         mot_json = out_root / "mot.json"
         summary_json = out_root / "summary.json"
@@ -99,31 +97,6 @@ def build_extra_eval_callback(opt):
                     strict,
                 )
             )
-            if toolkit.exists():
-                steps.append(
-                    run_extra_eval_step(
-                        "official_eval",
-                        [
-                            py,
-                            scripts / "eval_visdrone_vid_official.py",
-                            "--toolkit",
-                            toolkit,
-                            "--official-root",
-                            official_root,
-                            "--results",
-                            detections_dir,
-                            "--out",
-                            official_out,
-                        ],
-                        strict,
-                    )
-                )
-            else:
-                message = f"[extra-eval] official_eval skipped: toolkit not found at {toolkit}"
-                if strict:
-                    raise FileNotFoundError(message)
-                print(message, flush=True)
-                steps.append({"name": "official_eval", "ok": False, "skipped": True, "reason": message})
 
             steps.append(
                 run_extra_eval_step(
@@ -251,12 +224,12 @@ def parse_opt():
     parser.add_argument('--clip_stride', type=int, default=1, help='temporal stride between sampled refs')
     parser.add_argument('--ref_sample', default='uniform_local', choices=['uniform_local', 'uniform_global'], help='ref-frame sampling strategy')
     # Optional heavier video metrics, run after checkpoint save every N epochs.
-    parser.add_argument('--extra_eval_period', type=int, default=0, help='run official/flicker/MOT video eval every N epochs; 0 disables')
+    parser.add_argument('--extra_eval_period', type=int, default=0, help='run flicker/MOT video eval every N epochs; 0 disables')
     parser.add_argument('--extra_eval_official_root', default='datasets/VisDrone-VID/raw/VisDrone2019-VID-val', help='official VisDrone-VID split root with annotations/ and sequences/')
-    parser.add_argument('--extra_eval_toolkit', default='third_party/VisDrone2018-VID-toolkit', help='official VisDrone VID toolkit path')
+    parser.add_argument('--extra_eval_toolkit', default='third_party/VisDrone2018-VID-toolkit', help='deprecated; official AP/AR is no longer run by periodic extra eval')
     parser.add_argument('--extra_eval_tracker', default='ultralytics/cfg/trackers/bytetrack.yaml', help='tracker yaml for MOT export')
     parser.add_argument('--extra_eval_batch', type=int, default=16, help='batch size for detection export during extra eval')
-    parser.add_argument('--extra_eval_conf', type=float, default=0.001, help='confidence threshold for official detection export')
+    parser.add_argument('--extra_eval_conf', type=float, default=0.001, help='confidence threshold for detection export during extra eval')
     parser.add_argument('--extra_eval_track_conf', type=float, default=0.1, help='confidence threshold for tracking export')
     parser.add_argument('--extra_eval_iou', type=float, default=0.7, help='NMS IoU threshold for extra eval exports')
     parser.add_argument('--extra_eval_strict', action='store_true', help='fail training if an extra-eval step fails')
