@@ -230,6 +230,7 @@ def parse_opt():
     parser.add_argument('--num_ref_frames', type=int, default=4, help='reference frames per clip for VIDClipDataset (0 disables FAM)')
     parser.add_argument('--clip_stride', type=int, default=1, help='temporal stride between sampled refs')
     parser.add_argument('--ref_sample', default='uniform_local', choices=['uniform_local', 'uniform_global'], help='ref-frame sampling strategy')
+    parser.add_argument('--debug_clip_shape', action='store_true', help='print the first training batch image shape and clip layout')
     # Optional heavier video metrics, run after checkpoint save every N epochs.
     parser.add_argument('--extra_eval_period', type=int, default=0, help='run flicker/MOT video eval every N epochs; 0 disables')
     parser.add_argument('--extra_eval_official_root', default='datasets/VisDrone-VID/raw/VisDrone2019-VID-val', help='official VisDrone-VID split root with annotations/ and sequences/')
@@ -266,6 +267,7 @@ if __name__ == '__main__':
         "num_ref_frames": opt.num_ref_frames,
         "clip_stride": opt.clip_stride,
         "ref_sample": opt.ref_sample,
+        "debug_clip_shape": opt.debug_clip_shape,
     }
     for k in ("lr0", "lrf", "momentum", "weight_decay", "warmup_epochs", "warmup_bias_lr"):
         v = getattr(opt, k)

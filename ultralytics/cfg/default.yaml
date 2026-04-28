@@ -124,6 +124,7 @@ crop_fraction: 1.0 # (float) image crop fraction for classification (0.1-1), 1.0
 num_ref_frames: 4 # (int) reference frames per clip; 0 disables FAM
 clip_stride: 1 # (int) temporal stride between sampled refs in uniform_local mode
 ref_sample: uniform_local # (str) ref-frame sampling: uniform_local | uniform_global
+debug_clip_shape: False # (bool) print first training batch image shape and clip layout
 
 # Custom config.yaml ---------------------------------------------------------------------------------------------------
 cfg: # (str, optional) for overriding defaults.yaml
