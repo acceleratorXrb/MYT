@@ -79,6 +79,7 @@ class BaseValidator:
         self.args = get_cfg(overrides=args)
         self.dataloader = dataloader
         self.pbar = pbar
+        self.model = None
         self.stride = None
         self.data = None
         self.device = None
@@ -115,7 +116,6 @@ class BaseValidator:
             self.args.half = self.device.type != "cpu"  # force FP16 val during training
             model = trainer.ema.ema or trainer.model
             model = model.half() if self.args.half else model.float()
-            # self.model = model
             self.loss = torch.zeros_like(trainer.loss_items, device=trainer.device)
             self.args.plots &= trainer.stopper.possible_stop or (trainer.epoch == trainer.epochs - 1)
             model.eval()
@@ -128,7 +128,6 @@ class BaseValidator:
                 data=self.args.data,
                 fp16=self.args.half,
             )
-            # self.model = model
             self.device = model.device  # update device
             self.args.half = model.fp16  # update half
             stride, pt, jit, engine = model.stride, model.pt, model.jit, model.engine
@@ -156,6 +155,7 @@ class BaseValidator:
             model.eval()
             model.warmup(imgsz=(1 if pt else self.args.batch, 3, imgsz, imgsz))  # warmup
 
+        self.model = model
         self.run_callbacks("on_val_start")
         dt = (
             Profile(device=self.device),

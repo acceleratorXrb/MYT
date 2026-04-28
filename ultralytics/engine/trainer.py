@@ -54,7 +54,7 @@ from ultralytics.utils.torch_utils import (
 def should_validate_epoch(args, epoch, final_epoch, possible_stop, stop):
     """Return True when validation metrics should be computed for this epoch."""
     val_period = max(int(getattr(args, "val_period", 1) or 1), 1)
-    periodic_val = bool(args.val) and ((epoch + 1) % val_period == 0)
+    periodic_val = bool(args.val) and (epoch == 0 or (epoch + 1) % val_period == 0)
     return periodic_val or final_epoch or possible_stop or stop
 
 
