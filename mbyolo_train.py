@@ -210,6 +210,13 @@ def parse_opt():
     parser.add_argument('--val_period', type=int, default=1, help='validate every N epochs during training')
     parser.add_argument('--optimizer', default='SGD', help='SGD, Adam, AdamW')
     parser.add_argument('--amp', action='store_true', help='open amp')
+    parser.add_argument('--lr0', type=float, default=None, help='initial learning rate override')
+    parser.add_argument('--lrf', type=float, default=None, help='final learning rate factor override')
+    parser.add_argument('--momentum', type=float, default=None, help='optimizer momentum/beta1 override')
+    parser.add_argument('--weight_decay', type=float, default=None, help='optimizer weight decay override')
+    parser.add_argument('--warmup_epochs', type=float, default=None, help='warmup epochs override')
+    parser.add_argument('--warmup_bias_lr', type=float, default=None, help='initial bias learning rate during warmup')
+    parser.add_argument('--cos_lr', action='store_true', help='use cosine learning rate schedule')
     parser.add_argument('--project', default='output_dir/visdrone_vid', help='save to project/name')
     parser.add_argument('--name', default='mambayolo_t', help='save to project/name')
     parser.add_argument('--source', type=str, default='', help='source path for predict')
@@ -260,6 +267,12 @@ if __name__ == '__main__':
         "clip_stride": opt.clip_stride,
         "ref_sample": opt.ref_sample,
     }
+    for k in ("lr0", "lrf", "momentum", "weight_decay", "warmup_epochs", "warmup_bias_lr"):
+        v = getattr(opt, k)
+        if v is not None:
+            args[k] = v
+    if opt.cos_lr:
+        args["cos_lr"] = True
     model_path = resolve_path(opt.weights) if opt.weights else resolve_path(opt.config)
     model = YOLO(model_path)
     if task == "train":
