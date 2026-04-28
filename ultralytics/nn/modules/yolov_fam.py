@@ -67,10 +67,6 @@ class FeatureAggregationModule(nn.Module):
         """
         if ref_feat.numel() == 0 or ref_feat.shape[1] == 0:
             return key_feat
-        out_dtype = key_feat.dtype
-        key_feat = key_feat.float()
-        ref_feat = ref_feat.float()
-        ref_logits = ref_logits.float()
 
         B, C, H, W = key_feat.shape
         R = ref_feat.shape[1]
@@ -119,7 +115,7 @@ class FeatureAggregationModule(nn.Module):
         agg = torch.bmm(w, v)                                    # (B, HW, C)
 
         agg_2d = agg.reshape(B, H, W, C).permute(0, 3, 1, 2).contiguous()
-        return (key_feat + self.alpha.float() * agg_2d).to(out_dtype)
+        return key_feat + self.alpha * agg_2d
 
     def extra_repr(self) -> str:
         return (
