@@ -113,8 +113,19 @@ class BaseValidator:
         if self.training:
             self.device = trainer.device
             self.data = trainer.data
-            self.args.half = self.device.type != "cpu"  # force FP16 val during training
             model = trainer.ema.ema or trainer.model
+
+            self.args.half = self.device.type != "cpu"  # force FP16 val during training
+            try:
+                from ultralytics.nn.modules import Detect_VID
+
+                if isinstance(de_parallel(model).model[-1], Detect_VID):
+                    # Detect_VID validation is single-frame but still uses the custom VID head.
+                    # Keep validation in FP32 to avoid half-precision NaNs in Mamba/FAM paths.
+                    self.args.half = False
+            except Exception:
+                pass
+
             model = model.half() if self.args.half else model.float()
             self.loss = torch.zeros_like(trainer.loss_items, device=trainer.device)
             self.args.plots &= trainer.stopper.possible_stop or (trainer.epoch == trainer.epochs - 1)
