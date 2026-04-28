@@ -199,7 +199,7 @@ class Detect_VID(Detect):
             B, T = x[0].shape[0], 1
 
         for i in range(self.nl):
-            if T > 1 or self.training:
+            if self.clip_layout is not None or self.training:
                 x[i] = self._aggregate_clip(i, x[i], B, T)
             else:
                 x[i] = self._aggregate_stream(i, x[i])
