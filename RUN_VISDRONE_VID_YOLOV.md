@@ -21,12 +21,12 @@ pip install -v -e .
 VisDrone-VID 2019 视频版数据集（注意：不是 DET）。
 
 ```bash
-# 下载（zip 解压到 datasets/VisDrone-VID-raw 下）
-python tools/download_visdrone_vid_zips.py --out datasets/VisDrone-VID-raw
+# 推荐：setup.sh 自动下载 zip 到 datasets/VisDrone-VID/，并解压到 datasets/VisDrone-VID/raw/
+bash setup.sh
 
 # 转换到 YOLO 布局，输出到 datasets/VisDrone-VID/
 python tools/prepare_visdrone_vid_yolo.py \
-    --src datasets/VisDrone-VID-raw \
+    --src datasets/VisDrone-VID/raw \
     --out datasets/VisDrone-VID \
     --splits train val test-dev
 ```
@@ -51,6 +51,7 @@ python mbyolo_train.py \
     --data ultralytics/cfg/datasets/VisDrone-VID.yaml \
     --config ultralytics/cfg/models/mamba-yolo/Mamba-YOLO-T.yaml \
     --epochs 100 \
+    --val_period 1 \
     --batch_size 8 \
     --imgsz 640 \
     --amp \
@@ -69,6 +70,7 @@ python mbyolo_train.py \
     --data ultralytics/cfg/datasets/VisDrone-VID.yaml \
     --config ultralytics/cfg/models/mamba-yolo/Mamba-YOLO-T-VID.yaml \
     --epochs 100 \
+    --val_period 1 \
     --batch_size 2 \
     --imgsz 640 \
     --amp \
@@ -78,6 +80,20 @@ python mbyolo_train.py \
     --project output_dir/visdrone_vid \
     --name yolov_t_R4
 ```
+
+`--val_period 1` 表示每个 epoch 结束后都跑一次 Ultralytics 常规验证；
+当前代码中它已经是默认值。这个常规验证走 converted YOLO val split，且验证时为单帧输入，
+会产生 `precision(B)`、`recall(B)`、`mAP50(B)`、`mAP50-95(B)` 以及验证 loss。
+
+如果希望训练过程中每 3 个 epoch 自动额外跑一次视频级指标，可以在训练命令后追加：
+
+```bash
+    --extra_eval_period 3 \
+    --extra_eval_official_root datasets/VisDrone-VID/raw/VisDrone2019-VID-val
+```
+
+额外评测会保存到 `output_dir/visdrone_vid/yolov_t_R4/extra_eval/epochXXX/`，包括
+VisDrone 官方 AP/AR、cls flicker、ByteTrack 轨迹导出和 MOT identity 指标。
 
 显存提示：`B=2, T=5 (1 key + 4 ref), imgsz=640` 在 24 GB 卡上约 14 GB。如果 OOM：
 
@@ -100,13 +116,13 @@ python mbyolo_train.py \
 # 1) 导出预测到 VisDrone 格式
 python tools/export_visdrone_vid_results.py \
     --weights output_dir/visdrone_vid/yolov_t_R4/weights/best.pt \
-    --source datasets/VisDrone-VID-raw/VisDrone2019-VID-val \
+    --source datasets/VisDrone-VID/raw/VisDrone2019-VID-val \
     --out output_dir/visdrone_vid/yolov_t_R4/predictions
 
 # 2) 跑官方 evaluator
 python tools/eval_visdrone_vid_official.py \
     --toolkit third_party/VisDrone2018-VID-toolkit \
-    --official-root datasets/VisDrone-VID-raw/VisDrone2019-VID-val \
+    --official-root datasets/VisDrone-VID/raw/VisDrone2019-VID-val \
     --results output_dir/visdrone_vid/yolov_t_R4/predictions \
     --out output_dir/visdrone_vid/yolov_t_R4/official_eval
 ```
@@ -117,7 +133,7 @@ python tools/eval_visdrone_vid_official.py \
 
 ```bash
 python tools/eval_visdrone_vid_cls_flicker.py \
-    --gt datasets/VisDrone-VID-raw/VisDrone2019-VID-val/annotations \
+    --gt datasets/VisDrone-VID/raw/VisDrone2019-VID-val/annotations \
     --pred output_dir/visdrone_vid/yolov_t_R4/predictions \
     --iou 0.5 \
     --out output_dir/visdrone_vid/yolov_t_R4/flicker.json
@@ -125,20 +141,19 @@ python tools/eval_visdrone_vid_cls_flicker.py \
 
 输出关键字段：`macro_flicker`（按 sequence 宏平均的连续帧 cls 变化率，越低越好）。
 
-### 4.3 MOT 指标 (IDF1, IDS, MOTA)
+### 4.3 MOT identity 指标 (IDF1, IDP, IDR, IDS)
 
 ```bash
 # 1) 跑 ByteTrack 关联得到预测轨迹
-python mbyolo_train.py --task track_export ... # 或直接
 python tools/export_visdrone_vid_tracks.py \
     --weights output_dir/visdrone_vid/yolov_t_R4/weights/best.pt \
-    --source datasets/VisDrone-VID-raw/VisDrone2019-VID-val/sequences \
+    --source datasets/VisDrone-VID/raw/VisDrone2019-VID-val/sequences \
     --out output_dir/visdrone_vid/yolov_t_R4/tracks \
     --tracker ultralytics/cfg/trackers/bytetrack.yaml
 
 # 2) MOT eval
 python tools/eval_visdrone_vid_mot.py \
-    --gt datasets/VisDrone-VID-raw/VisDrone2019-VID-val/annotations \
+    --gt datasets/VisDrone-VID/raw/VisDrone2019-VID-val/annotations \
     --pred output_dir/visdrone_vid/yolov_t_R4/tracks \
     --out output_dir/visdrone_vid/yolov_t_R4/mot.json
 ```
@@ -151,7 +166,7 @@ python tools/eval_visdrone_vid_mot.py \
 |---|---|---|
 | VisDrone mAP / mAP@0.5 | ≥ baseline | FAM 不应损害检测精度 |
 | macro_flicker | 相对降低 ≥ 20% | 项目核心目标 |
-| IDF1 / MOTA | baseline ±1 | FAM 不直接帮助轨迹关联 |
+| IDF1 / IDS | baseline ±1 | FAM 不直接帮助轨迹关联；当前脚本不计算 MOTA |
 | FPS | ~ baseline -8% | FAM 聚合开销 |
 
 ## 6. 消融建议

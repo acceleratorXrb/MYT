@@ -140,16 +140,49 @@ If an archive is missing, download the official split archives into the project:
 python mbyolo_train.py \
   --task train \
   --data output_dir/visdrone_vid/VisDrone-VID.local.yaml \
-  --config ultralytics/cfg/models/mamba-yolo/Mamba-YOLO-T.yaml \
+  --config ultralytics/cfg/models/mamba-yolo/Mamba-YOLO-T-VID.yaml \
   --imgsz 640 \
   --batch_size 16 \
   --epochs 100 \
+  --val_period 1 \
   --workers 8 \
   --device 0 \
   --amp \
   --project output_dir/visdrone_vid \
   --name mambayolo_t
 ```
+
+`--val_period 1` validates once after every epoch and is now the default. The
+built-in validation uses the converted validation split as a single-frame
+detection validation pass and writes the usual Ultralytics metrics:
+`precision(B)`, `recall(B)`, `mAP50(B)`, `mAP50-95(B)`, plus validation losses.
+
+To also run the heavier video metrics automatically during training, add
+`--extra_eval_period 3` and point it at the original VisDrone-VID validation
+split:
+
+```bash
+python mbyolo_train.py \
+  --task train \
+  --data output_dir/visdrone_vid/VisDrone-VID.local.yaml \
+  --config ultralytics/cfg/models/mamba-yolo/Mamba-YOLO-T-VID.yaml \
+  --imgsz 640 \
+  --batch_size 2 \
+  --epochs 100 \
+  --val_period 1 \
+  --workers 4 \
+  --device 0 \
+  --amp \
+  --project output_dir/visdrone_vid \
+  --name mambayolo_t \
+  --extra_eval_period 3 \
+  --extra_eval_official_root datasets/VisDrone-VID/raw/VisDrone2019-VID-val
+```
+
+Every third epoch, this exports detections, runs the official VisDrone AP/AR
+wrapper when the toolkit is available, computes classification flicker, exports
+ByteTrack tracks, and computes the MOT identity metrics. Results are saved under
+`output_dir/visdrone_vid/mambayolo_t/extra_eval/epochXXX/`.
 
 ## 4. Validate
 
@@ -237,4 +270,12 @@ The full T-model pipeline is wrapped in:
 bash scripts/run_visdrone_vid_t_full.sh
 ```
 
-The default dataset path is project-local: `datasets/VisDrone-VID`.
+The default dataset path is project-local: `datasets/VisDrone-VID`. The script
+runs per-epoch validation by default (`VAL_PERIOD=1`). Periodic video metrics
+are opt-in:
+
+```bash
+EXTRA_EVAL_PERIOD=3 \
+EXTRA_EVAL_OFFICIAL_ROOT=datasets/VisDrone-VID/raw/VisDrone2019-VID-val \
+bash scripts/run_visdrone_vid_t_full.sh
+```

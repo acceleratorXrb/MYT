@@ -18,7 +18,16 @@ IMGSZ="${IMGSZ:-640}"
 BATCH="${BATCH:-2}"
 WORKERS="${WORKERS:-8}"
 EPOCHS="${EPOCHS:-300}"
+VAL_PERIOD="${VAL_PERIOD:-1}"
 MODEL_CONFIG="${MODEL_CONFIG:-ultralytics/cfg/models/mamba-yolo/Mamba-YOLO-T-VID.yaml}"
+EXTRA_EVAL_PERIOD="${EXTRA_EVAL_PERIOD:-0}"
+EXTRA_EVAL_OFFICIAL_ROOT="${EXTRA_EVAL_OFFICIAL_ROOT:-${RAW_ROOT}/VisDrone2019-VID-val}"
+EXTRA_EVAL_TOOLKIT="${EXTRA_EVAL_TOOLKIT:-third_party/VisDrone2018-VID-toolkit}"
+EXTRA_EVAL_TRACKER="${EXTRA_EVAL_TRACKER:-ultralytics/cfg/trackers/bytetrack.yaml}"
+EXTRA_EVAL_BATCH="${EXTRA_EVAL_BATCH:-16}"
+EXTRA_EVAL_CONF="${EXTRA_EVAL_CONF:-0.001}"
+EXTRA_EVAL_TRACK_CONF="${EXTRA_EVAL_TRACK_CONF:-0.1}"
+EXTRA_EVAL_IOU="${EXTRA_EVAL_IOU:-0.7}"
 
 mkdir -p "${PROJECT}"
 export MPLCONFIGDIR="${MPLCONFIGDIR:-/tmp/mambayolo_matplotlib}"
@@ -61,18 +70,35 @@ else
     --overwrite
 fi
 
-"${PYTHON}" mbyolo_train.py \
-  --task train \
-  --data "${DATA_YAML}" \
-  --config "${MODEL_CONFIG}" \
-  --imgsz "${IMGSZ}" \
-  --batch_size "${BATCH}" \
-  --epochs "${EPOCHS}" \
-  --workers "${WORKERS}" \
-  --device "${DEVICE}" \
-  --amp \
-  --project "${PROJECT}" \
+TRAIN_ARGS=(
+  --task train
+  --data "${DATA_YAML}"
+  --config "${MODEL_CONFIG}"
+  --imgsz "${IMGSZ}"
+  --batch_size "${BATCH}"
+  --epochs "${EPOCHS}"
+  --val_period "${VAL_PERIOD}"
+  --workers "${WORKERS}"
+  --device "${DEVICE}"
+  --amp
+  --project "${PROJECT}"
   --name "${NAME}"
+)
+
+if [[ "${EXTRA_EVAL_PERIOD}" -gt 0 ]]; then
+  TRAIN_ARGS+=(
+    --extra_eval_period "${EXTRA_EVAL_PERIOD}"
+    --extra_eval_official_root "${EXTRA_EVAL_OFFICIAL_ROOT}"
+    --extra_eval_toolkit "${EXTRA_EVAL_TOOLKIT}"
+    --extra_eval_tracker "${EXTRA_EVAL_TRACKER}"
+    --extra_eval_batch "${EXTRA_EVAL_BATCH}"
+    --extra_eval_conf "${EXTRA_EVAL_CONF}"
+    --extra_eval_track_conf "${EXTRA_EVAL_TRACK_CONF}"
+    --extra_eval_iou "${EXTRA_EVAL_IOU}"
+  )
+fi
+
+"${PYTHON}" mbyolo_train.py "${TRAIN_ARGS[@]}"
 
 BEST="${PROJECT}/${NAME}/weights/best.pt"
 
