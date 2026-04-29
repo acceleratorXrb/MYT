@@ -42,6 +42,20 @@ if [[ ! -x "${VENV_DIR}/bin/python" ]]; then
 fi
 
 PYTHON="${VENV_DIR}/bin/python"
+if ! "${PYTHON}" -m pip --version >/dev/null 2>&1; then
+  echo "[setup] pip is missing in ${VENV_DIR}; bootstrapping it"
+  if ! "${PYTHON}" -m ensurepip --upgrade; then
+    "${PYTHON}" - <<'PY'
+from pathlib import Path
+from urllib.request import urlretrieve
+
+target = Path("/tmp/get-pip.py")
+urlretrieve("https://bootstrap.pypa.io/get-pip.py", target)
+print(target)
+PY
+    "${PYTHON}" /tmp/get-pip.py
+  fi
+fi
 TORCH_CUDA_TAG="$(detect_cuda_tag)"
 PYTORCH_WHEEL_BASE="${PYTORCH_WHEEL_BASE:-https://mirrors.aliyun.com/pytorch-wheels/${TORCH_CUDA_TAG}}"
 
