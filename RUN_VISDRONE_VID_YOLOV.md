@@ -85,10 +85,10 @@ python mbyolo_train.py \
 当前代码中它已经是默认值。这个常规验证走 converted YOLO val split，且验证时为单帧输入，
 会产生 `precision(B)`、`recall(B)`、`mAP50(B)`、`mAP50-95(B)` 以及验证 loss。
 
-如果希望训练过程中每 3 个 epoch 自动额外跑一次视频级指标，可以在训练命令后追加：
+如果希望训练过程中每个 epoch 自动额外跑一次视频级指标，可以在训练命令后追加：
 
 ```bash
-    --extra_eval_period 3 \
+    --extra_eval_period 1 \
     --extra_eval_official_root datasets/VisDrone-VID/raw/VisDrone2019-VID-val
 ```
 
