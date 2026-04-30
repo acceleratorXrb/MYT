@@ -181,6 +181,8 @@ CFG_BOOL_KEYS = {  # boolean-only arguments
     "simplify",
     "nms",
     "profile",
+    "debug_clip_shape",
+    "debug_clip_aug",
     "multi_scale",
 }
 

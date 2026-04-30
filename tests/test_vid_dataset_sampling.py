@@ -146,7 +146,32 @@ def test_clip_single_image_aug_is_synchronized(fake_visdrone_root):
     # With seed=1, RandomFlip(horizontal, p=0.5) flips. All frames in the
     # clip should therefore share the same horizontal orientation.
     for img in imgs:
+        img = img.float()
         assert float(img[:, :, 0].mean()) > float(img[:, :, -1].mean())
+
+
+def test_clip_mosaic_keeps_clip_shape_and_labels_valid(fake_visdrone_root):
+    root, _ = fake_visdrone_root
+    ds = _build_dataset(root, num_ref_frames=2, mosaic=1.0)
+
+    sample = ds[0]
+
+    assert sample["img"].shape == (3, 3, 32, 32)
+    assert len(sample["cls"]) >= 4
+    assert sample["bboxes"].shape[1] == 4
+    assert torch.all(sample["bboxes"] >= 0)
+    assert torch.all(sample["bboxes"] <= 1)
+
+
+def test_clip_mixup_keeps_clip_shape_and_merges_labels(fake_visdrone_root):
+    root, _ = fake_visdrone_root
+    ds = _build_dataset(root, num_ref_frames=2, mixup=1.0)
+
+    sample = ds[0]
+
+    assert sample["img"].shape == (3, 3, 32, 32)
+    assert len(sample["cls"]) >= 2
+    assert sample["bboxes"].shape[1] == 4
 
 
 if __name__ == "__main__":

@@ -22,6 +22,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 from .dataset import YOLODataset
 
@@ -45,10 +46,15 @@ class VIDClipDataset(YOLODataset):
         clip_stride: int = 1,
         ref_sample: str = "uniform_local",
         seq_key: str = "parent",
+        debug_clip_aug: bool = False,
         **kwargs,
     ):
         self._vid_num_ref = max(0, int(num_ref_frames))
         self._vid_stride = max(1, int(clip_stride))
+        self._vid_mosaic = 0.0
+        self._vid_mixup = 0.0
+        self._debug_clip_aug = bool(debug_clip_aug)
+        self._debug_clip_aug_printed = 0
         if ref_sample not in {"uniform_local", "uniform_global"}:
             raise ValueError(f"ref_sample must be uniform_local|uniform_global, got {ref_sample}")
         self._vid_ref_sample = ref_sample
@@ -59,6 +65,8 @@ class VIDClipDataset(YOLODataset):
     # ----- transforms: disable multi-image aug; sync single-image aug in __getitem__ -----
     def build_transforms(self, hyp=None):
         if hyp is not None:
+            self._vid_mosaic = float(getattr(hyp, "mosaic", 0.0) or 0.0)
+            self._vid_mixup = float(getattr(hyp, "mixup", 0.0) or 0.0)
             for k in ("mosaic", "mixup", "copy_paste"):
                 if hasattr(hyp, k):
                     setattr(hyp, k, 0.0)
@@ -130,8 +138,7 @@ class VIDClipDataset(YOLODataset):
             random.setstate(py_state)
             np.random.set_state(np_state)
 
-    # ----- per-sample assembly -----
-    def __getitem__(self, idx: int):
+    def _build_clip(self, idx: int):
         # Use one seed for the whole clip so single-image random transforms
         # (affine/perspective, flips, HSV, BGR) are shared by key and refs.
         aug_seed = random.randint(0, 2**32 - 1)
@@ -154,6 +161,98 @@ class VIDClipDataset(YOLODataset):
         key_sample["img"] = clip
         key_sample["clip_T"] = clip.shape[0]
         return key_sample
+
+    @staticmethod
+    def _shift_scale_boxes(bboxes: torch.Tensor, x0: int, y0: int, tile_w: int, tile_h: int, out_w: int, out_h: int):
+        if bboxes.numel() == 0:
+            return bboxes
+        out = bboxes.clone()
+        out[:, 0] = (bboxes[:, 0] * tile_w + x0) / out_w
+        out[:, 1] = (bboxes[:, 1] * tile_h + y0) / out_h
+        out[:, 2] = bboxes[:, 2] * tile_w / out_w
+        out[:, 3] = bboxes[:, 3] * tile_h / out_h
+        return out.clamp_(0.0, 1.0)
+
+    @staticmethod
+    def _merge_label_tensors(samples: list[dict], boxes: list[torch.Tensor] | None = None):
+        cls = [s["cls"] for s in samples if s.get("cls") is not None and len(s["cls"])]
+        merged_cls = torch.cat(cls, 0) if cls else torch.zeros((0, 1), dtype=samples[0]["cls"].dtype)
+        if boxes is None:
+            boxes = [s["bboxes"] for s in samples if s.get("bboxes") is not None and len(s["bboxes"])]
+        else:
+            boxes = [b for b in boxes if b is not None and len(b)]
+        merged_boxes = torch.cat(boxes, 0) if boxes else torch.zeros((0, 4), dtype=samples[0]["bboxes"].dtype)
+        return merged_cls, merged_boxes
+
+    def _apply_clip_mosaic(self, sample: dict):
+        """Apply synchronized 2x2 mosaic to whole clips after per-frame transforms."""
+        indexes = [random.randint(0, len(self) - 1) for _ in range(3)]
+        samples = [sample] + [self._build_clip(i) for i in indexes]
+        clip = samples[0]["img"]
+        T, C, H, W = clip.shape
+        tile_h, tile_w = H // 2, W // 2
+        out = torch.full_like(clip, 114)
+        boxes = []
+        placements = ((0, 0), (tile_w, 0), (0, tile_h), (tile_w, tile_h))
+
+        for s, (x0, y0) in zip(samples, placements):
+            tile = F.interpolate(s["img"].float(), size=(tile_h, tile_w), mode="bilinear", align_corners=False)
+            tile = tile.round().clamp_(0, 255).to(dtype=clip.dtype)
+            out[:, :, y0 : y0 + tile_h, x0 : x0 + tile_w] = tile
+            boxes.append(self._shift_scale_boxes(s["bboxes"], x0, y0, tile_w, tile_h, W, H))
+
+        sample["img"] = out
+        sample["cls"], sample["bboxes"] = self._merge_label_tensors(samples, boxes)
+        if "batch_idx" in sample:
+            sample["batch_idx"] = torch.zeros((len(sample["cls"]),), dtype=sample["batch_idx"].dtype)
+        return sample
+
+    def _apply_clip_mixup(self, sample: dict):
+        """Apply MixUp to whole clips and concatenate key-frame labels."""
+        other = self._build_clip(random.randint(0, len(self) - 1))
+        r = float(np.random.beta(32.0, 32.0))
+        mixed = sample["img"].float() * r + other["img"].float() * (1.0 - r)
+        sample["img"] = mixed.round().clamp_(0, 255).to(dtype=sample["img"].dtype)
+        sample["cls"], sample["bboxes"] = self._merge_label_tensors([sample, other])
+        if "batch_idx" in sample:
+            sample["batch_idx"] = torch.zeros((len(sample["cls"]),), dtype=sample["batch_idx"].dtype)
+        return sample
+
+    def _debug_print_clip_aug(self, idx: int, sample: dict, mosaic_applied: bool, mixup_applied: bool):
+        if not self._debug_clip_aug or self._debug_clip_aug_printed >= 5:
+            return
+        img = sample["img"]
+        bboxes = sample.get("bboxes")
+        labels = int(len(sample.get("cls", [])))
+        if bboxes is not None and bboxes.numel():
+            box_min = float(bboxes.min().item())
+            box_max = float(bboxes.max().item())
+        else:
+            box_min = box_max = None
+        print(
+            "[debug-clip-aug] "
+            f"idx={idx} augment={self.augment} "
+            f"num_ref_frames={self._vid_num_ref} clip_stride={self._vid_stride} ref_sample={self._vid_ref_sample} "
+            f"mosaic_p={self._vid_mosaic} mosaic_applied={mosaic_applied} "
+            f"mixup_p={self._vid_mixup} mixup_applied={mixup_applied} "
+            f"img_shape={tuple(img.shape)} labels={labels} bbox_min={box_min} bbox_max={box_max}",
+            flush=True,
+        )
+        self._debug_clip_aug_printed += 1
+
+    # ----- per-sample assembly -----
+    def __getitem__(self, idx: int):
+        sample = self._build_clip(idx)
+        mosaic_applied = False
+        mixup_applied = False
+        if self.augment and self._vid_mosaic > 0.0 and random.random() < self._vid_mosaic:
+            sample = self._apply_clip_mosaic(sample)
+            mosaic_applied = True
+        if self.augment and self._vid_mixup > 0.0 and random.random() < self._vid_mixup:
+            sample = self._apply_clip_mixup(sample)
+            mixup_applied = True
+        self._debug_print_clip_aug(idx, sample, mosaic_applied, mixup_applied)
+        return sample
 
     # ----- collate: flatten (B, T, 3, H, W) -> (B*T, 3, H, W) and emit clip_layout -----
     @staticmethod
