@@ -14,6 +14,33 @@ def resolve_path(path):
     return path if os.path.isabs(path) else os.path.join(ROOT, path)
 
 
+def str2bool(value):
+    if isinstance(value, bool):
+        return value
+    value = str(value).lower()
+    if value in {"true", "1", "yes", "y", "on"}:
+        return True
+    if value in {"false", "0", "no", "n", "off"}:
+        return False
+    raise argparse.ArgumentTypeError(f"Expected a boolean value, got {value!r}")
+
+
+def bool_or_str(value):
+    try:
+        return str2bool(value)
+    except argparse.ArgumentTypeError:
+        return value
+
+
+def parse_freeze(value):
+    if value is None:
+        return None
+    value = str(value)
+    if "," in value:
+        return [int(x) for x in value.split(",") if x.strip()]
+    return int(value)
+
+
 def run_extra_eval_step(name, cmd, strict):
     cmd = [str(x) for x in cmd]
     print(f"[extra-eval] {name}: {' '.join(map(str, cmd))}", flush=True)
@@ -170,7 +197,7 @@ def build_extra_eval_callback(opt):
     return on_model_save
 
 
-def resolve_dataset_yaml(path, project):
+def resolve_dataset_yaml(path, project, data_task="auto"):
     """Materialize project-local dataset roots as absolute paths for Ultralytics."""
     data_path = Path(resolve_path(path))
     if data_path.suffix.lower() not in {".yaml", ".yml"} or not data_path.exists():
@@ -179,18 +206,32 @@ def resolve_dataset_yaml(path, project):
     with data_path.open("r", encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
 
+    changed = False
     dataset_root = data.get("path")
-    if not isinstance(dataset_root, str) or os.path.isabs(dataset_root):
+    if isinstance(dataset_root, str) and not os.path.isabs(dataset_root):
+        project_dataset_root = Path(resolve_path(dataset_root))
+        if project_dataset_root.exists():
+            data["path"] = str(project_dataset_root.resolve())
+            changed = True
+
+    if data_task == "detect":
+        if "task" in data:
+            data.pop("task", None)
+            changed = True
+    elif data_task == "vid":
+        if data.get("task") != "vid":
+            data["task"] = "vid"
+            changed = True
+    elif data_task != "auto":
+        raise ValueError(f"Unsupported data_task: {data_task}")
+
+    if not changed:
         return str(data_path)
 
-    project_dataset_root = Path(resolve_path(dataset_root))
-    if not project_dataset_root.exists():
-        return str(data_path)
-
-    data["path"] = str(project_dataset_root.resolve())
     resolved_dir = Path(resolve_path(project))
     resolved_dir.mkdir(parents=True, exist_ok=True)
-    resolved_yaml = resolved_dir / f"{data_path.stem}.resolved.yaml"
+    suffix = data_task if data_task != "auto" else "resolved"
+    resolved_yaml = resolved_dir / f"{data_path.stem}.{suffix}.yaml"
     with resolved_yaml.open("w", encoding="utf-8") as f:
         yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
     return str(resolved_yaml)
@@ -204,6 +245,7 @@ def parse_opt():
     parser.add_argument('--batch_size', type=int, default=16, help='batch size')
     parser.add_argument('--imgsz', '--img', '--img-size', type=int, default=640, help='inference size (pixels)')
     parser.add_argument('--task', default='train', help='train, val, test, predict or export')
+    parser.add_argument('--data_task', default='auto', choices=['auto', 'detect', 'vid'], help='override dataset task; use detect for single-frame official Mamba-YOLO baseline')
     parser.add_argument('--device', default='0', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
     parser.add_argument('--workers', type=int, default=8, help='max dataloader workers (per RANK in DDP mode)')
     parser.add_argument('--epochs', type=int, default=300)
@@ -215,8 +257,46 @@ def parse_opt():
     parser.add_argument('--momentum', type=float, default=None, help='optimizer momentum/beta1 override')
     parser.add_argument('--weight_decay', type=float, default=None, help='optimizer weight decay override')
     parser.add_argument('--warmup_epochs', type=float, default=None, help='warmup epochs override')
+    parser.add_argument('--warmup_momentum', type=float, default=None, help='warmup initial momentum override')
     parser.add_argument('--warmup_bias_lr', type=float, default=None, help='initial bias learning rate during warmup')
     parser.add_argument('--cos_lr', action='store_true', help='use cosine learning rate schedule')
+    parser.add_argument('--patience', type=int, default=None, help='early stopping patience')
+    parser.add_argument('--save_period', type=int, default=None, help='save checkpoint every N epochs')
+    parser.add_argument('--cache', nargs='?', const=True, default=None, help='cache images: ram, disk, true/false')
+    parser.add_argument('--pretrained', nargs='?', const=True, default=None, type=bool_or_str, help='use pretrained weights or a pretrained checkpoint path')
+    parser.add_argument('--seed', type=int, default=None, help='random seed')
+    parser.add_argument('--deterministic', nargs='?', const=True, default=None, type=str2bool, help='enable deterministic training')
+    parser.add_argument('--single_cls', action='store_true', help='train all classes as one class')
+    parser.add_argument('--rect', action='store_true', help='rectangular training')
+    parser.add_argument('--close_mosaic', type=int, default=None, help='disable mosaic for final N epochs')
+    parser.add_argument('--fraction', type=float, default=None, help='fraction of training data to use')
+    parser.add_argument('--freeze', type=parse_freeze, default=None, help='freeze first N layers or comma-separated layer indices')
+    parser.add_argument('--multi_scale', action='store_true', help='enable multi-scale training')
+    parser.add_argument('--box', type=float, default=None, help='box loss gain')
+    parser.add_argument('--cls', type=float, default=None, help='classification loss gain')
+    parser.add_argument('--dfl', type=float, default=None, help='DFL loss gain')
+    parser.add_argument('--label_smoothing', type=float, default=None, help='label smoothing fraction')
+    parser.add_argument('--nbs', type=int, default=None, help='nominal batch size')
+    parser.add_argument('--hsv_h', type=float, default=None, help='HSV hue augmentation')
+    parser.add_argument('--hsv_s', type=float, default=None, help='HSV saturation augmentation')
+    parser.add_argument('--hsv_v', type=float, default=None, help='HSV value augmentation')
+    parser.add_argument('--degrees', type=float, default=None, help='rotation augmentation degrees')
+    parser.add_argument('--translate', type=float, default=None, help='translation augmentation fraction')
+    parser.add_argument('--scale', type=float, default=None, help='scale augmentation gain')
+    parser.add_argument('--shear', type=float, default=None, help='shear augmentation degrees')
+    parser.add_argument('--perspective', type=float, default=None, help='perspective augmentation fraction')
+    parser.add_argument('--flipud', type=float, default=None, help='vertical flip probability')
+    parser.add_argument('--fliplr', type=float, default=None, help='horizontal flip probability')
+    parser.add_argument('--bgr', type=float, default=None, help='BGR channel swap probability')
+    parser.add_argument('--mosaic', type=float, default=None, help='mosaic augmentation probability')
+    parser.add_argument('--mixup', type=float, default=None, help='mixup augmentation probability')
+    parser.add_argument('--copy_paste', type=float, default=None, help='copy-paste augmentation probability')
+    parser.add_argument('--conf', type=float, default=None, help='validation/prediction confidence threshold')
+    parser.add_argument('--iou', type=float, default=None, help='NMS IoU threshold')
+    parser.add_argument('--max_det', type=int, default=None, help='maximum detections per image')
+    parser.add_argument('--plots', nargs='?', const=True, default=None, type=str2bool, help='save training/validation plots')
+    parser.add_argument('--save_json', action='store_true', help='save COCO-style validation JSON when supported')
+    parser.add_argument('--save_hybrid', action='store_true', help='save hybrid validation labels')
     parser.add_argument('--project', default='output_dir/visdrone_vid', help='save to project/name')
     parser.add_argument('--name', default='mambayolo_t', help='save to project/name')
     parser.add_argument('--source', type=str, default='', help='source path for predict')
@@ -250,7 +330,7 @@ if __name__ == '__main__':
     from ultralytics import YOLO
 
     task = opt.task.lower()
-    data = resolve_dataset_yaml(opt.data, opt.project)
+    data = resolve_dataset_yaml(opt.data, opt.project, opt.data_task)
     args = {
         "data": data,
         "epochs": opt.epochs,
@@ -269,12 +349,22 @@ if __name__ == '__main__':
         "ref_sample": opt.ref_sample,
         "debug_clip_shape": opt.debug_clip_shape,
     }
-    for k in ("lr0", "lrf", "momentum", "weight_decay", "warmup_epochs", "warmup_bias_lr"):
+    passthrough = (
+        "lr0", "lrf", "momentum", "weight_decay", "warmup_epochs", "warmup_momentum", "warmup_bias_lr",
+        "patience", "save_period", "cache", "pretrained", "seed", "deterministic", "close_mosaic",
+        "fraction", "freeze", "box", "cls", "dfl", "label_smoothing", "nbs", "hsv_h", "hsv_s", "hsv_v",
+        "degrees", "translate", "scale", "shear", "perspective", "flipud", "fliplr", "bgr", "mosaic",
+        "mixup", "copy_paste", "conf", "iou", "max_det", "plots",
+    )
+    for k in passthrough:
         v = getattr(opt, k)
         if v is not None:
             args[k] = v
     if opt.cos_lr:
         args["cos_lr"] = True
+    for k in ("single_cls", "rect", "multi_scale", "save_json", "save_hybrid"):
+        if getattr(opt, k):
+            args[k] = True
     model_path = resolve_path(opt.weights) if opt.weights else resolve_path(opt.config)
     model = YOLO(model_path)
     if task == "train":
