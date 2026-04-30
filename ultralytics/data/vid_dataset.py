@@ -7,8 +7,10 @@ frame; references are unlabeled context. The collate function flattens the
 clip layout to `(B*T, 3, H, W)` so the unmodified Mamba-YOLO backbone can run
 without changes, and stashes `clip_layout=(B, T)` in the batch dict.
 
-Random augmentations that would break geometric correspondence between key and
-references (mosaic, mixup, affine, flips, copy_paste) are disabled in clip mode.
+Clip-breaking multi-image augmentations (mosaic, mixup, copy_paste) are disabled
+in clip mode. Single-image random augmentations such as affine/perspective,
+flip, HSV, and BGR are applied with synchronized random seeds across the key
+and reference frames so the clip keeps a shared transform.
 """
 
 from __future__ import annotations
@@ -54,14 +56,10 @@ class VIDClipDataset(YOLODataset):
         super().__init__(*args, **kwargs)
         self._build_seq_index()
 
-    # ----- transforms: disable spatial random aug (preserves clip correspondence) -----
+    # ----- transforms: disable multi-image aug; sync single-image aug in __getitem__ -----
     def build_transforms(self, hyp=None):
         if hyp is not None:
-            for k in (
-                "mosaic", "mixup", "copy_paste",
-                "degrees", "translate", "scale", "shear", "perspective",
-                "fliplr", "flipud",
-            ):
+            for k in ("mosaic", "mixup", "copy_paste"):
                 if hasattr(hyp, k):
                     setattr(hyp, k, 0.0)
         return super().build_transforms(hyp)
@@ -117,10 +115,27 @@ class VIDClipDataset(YOLODataset):
             picked = random.choices(choices_pos, k=N)
         return [seq_idxs[p] for p in picked]
 
+    def _get_sync_aug_sample(self, idx: int, seed: int):
+        """Load one frame while replaying the same random augment decisions for a clip."""
+        if not self.augment:
+            return super().__getitem__(idx)
+
+        py_state = random.getstate()
+        np_state = np.random.get_state()
+        random.seed(seed)
+        np.random.seed(seed % (2**32))
+        try:
+            return super().__getitem__(idx)
+        finally:
+            random.setstate(py_state)
+            np.random.set_state(np_state)
+
     # ----- per-sample assembly -----
     def __getitem__(self, idx: int):
-        # Key frame: full transforms (deterministic since random aug is disabled)
-        key_sample = super().__getitem__(idx)
+        # Use one seed for the whole clip so single-image random transforms
+        # (affine/perspective, flips, HSV, BGR) are shared by key and refs.
+        aug_seed = random.randint(0, 2**32 - 1)
+        key_sample = self._get_sync_aug_sample(idx, aug_seed)
 
         if self._vid_num_ref == 0:
             # Promote key-only to a 1-frame clip
@@ -131,7 +146,7 @@ class VIDClipDataset(YOLODataset):
         ref_idxs = self._sample_refs(idx)
         ref_imgs = []
         for r_idx in ref_idxs:
-            r_sample = super().__getitem__(r_idx)
+            r_sample = self._get_sync_aug_sample(r_idx, aug_seed)
             ref_imgs.append(r_sample["img"])  # (3, H, W) tensor
 
         # Stack: key first, then refs -> (T, 3, H, W)

@@ -32,16 +32,19 @@ def fake_visdrone_root(tmp_path: Path):
         (lbl_dir / seq).mkdir(parents=True)
         for f in range(1, n + 1):
             stem = f"{f:07d}"
-            # tiny RGB image (32x32) saved as jpg
+            # tiny RGB image (32x32) saved as jpg, with a horizontal gradient
+            # so flip synchronization can be observed.
             from PIL import Image
-            Image.fromarray(np.full((32, 32, 3), f, dtype=np.uint8)).save(
-                img_dir / seq / f"{stem}.jpg")
+            x = np.arange(32, dtype=np.uint8)[None, :, None]
+            img = np.repeat(x, 32, axis=0)
+            img = np.repeat(img, 3, axis=2) + f
+            Image.fromarray(img).save(img_dir / seq / f"{stem}.jpg")
             # one synthetic label per frame
             (lbl_dir / seq / f"{stem}.txt").write_text("0 0.5 0.5 0.2 0.2\n")
     return root, sequences
 
 
-def _build_dataset(root: Path, num_ref_frames: int = 4, ref_sample: str = "uniform_local"):
+def _build_dataset(root: Path, num_ref_frames: int = 4, ref_sample: str = "uniform_local", **hyp_overrides):
     from types import SimpleNamespace
     from ultralytics.data.vid_dataset import VIDClipDataset
 
@@ -52,6 +55,8 @@ def _build_dataset(root: Path, num_ref_frames: int = 4, ref_sample: str = "unifo
         fliplr=0.0, flipud=0.0, hsv_h=0.0, hsv_s=0.0, hsv_v=0.0, bgr=0.0,
         mask_ratio=4, overlap_mask=True,
     )
+    for k, v in hyp_overrides.items():
+        setattr(hyp, k, v)
     return VIDClipDataset(
         img_path=str(root / "images" / "train"),
         imgsz=32,
@@ -127,6 +132,21 @@ def test_zero_refs_makes_t_equal_one(fake_visdrone_root):
     B, T = batch["clip_layout"].view(-1).tolist()
     assert (B, T) == (1, 1)
     assert batch["img"].shape == (1, 3, 32, 32)
+
+
+def test_clip_single_image_aug_is_synchronized(fake_visdrone_root):
+    root, _ = fake_visdrone_root
+    ds = _build_dataset(root, num_ref_frames=2, fliplr=0.5)
+
+    with patch("ultralytics.data.vid_dataset.random.randint", return_value=1):
+        sample = ds[0]
+
+    imgs = sample["img"]
+    assert imgs.shape[0] == 3
+    # With seed=1, RandomFlip(horizontal, p=0.5) flips. All frames in the
+    # clip should therefore share the same horizontal orientation.
+    for img in imgs:
+        assert float(img[:, :, 0].mean()) > float(img[:, :, -1].mean())
 
 
 if __name__ == "__main__":

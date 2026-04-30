@@ -195,13 +195,13 @@ python mbyolo_train.py ... --ref_sample uniform_global --name yolov_t_global
 
 - FAM 模块: `ultralytics/nn/modules/yolov_fam.py`
 - Detect_VID 头: `ultralytics/nn/modules/head.py` (cv3 拆为 pre + cls，按 P3/P4/P5 各挂一个 FAM)
-- 视频 clip dataset: `ultralytics/data/vid_dataset.py` (key + N refs，refs 仅 LetterBox 不做随机增广)
+- 视频 clip dataset: `ultralytics/data/vid_dataset.py` (key + N refs；mosaic/mixup/copy_paste 关闭，affine/flip/HSV 等单帧增广在 clip 内同步随机参数)
 - 训练路由: `ultralytics/models/yolo/detect/train.py` 在 `preprocess_batch` 中读取 `clip_layout` 写到 head
 - 损失路由: `ultralytics/nn/tasks.py:DetectionModel.init_criterion` 在 head 是 Detect_VID 时返回 `v8VIDDetectionLoss`
 - α 冷启动：`FeatureAggregationModule` 初始化 `alpha=0`（首次前向 = 恒等）；如需 warmup 可调用 `set_alpha_warmup(model, target)` 在 epoch callback 里渐增
 
 ## 8. 已知限制
 
-- 增广策略：clip 内为保持 key-ref 几何对应，强制关闭了 mosaic/mixup/affine/flip 等所有空间随机增广，相比基线 (mosaic=1.0) 在数据多样性上有损失
+- 增广策略：clip 内为保持 key-ref 几何对应，仍关闭 mosaic/mixup/copy_paste；affine/perspective/flip/HSV/BGR 已恢复为 clip 内同步随机参数。相比单帧基线，clip-mosaic/clip-mixup 仍未实现
 - Ref 帧标签：当前实现丢弃 ref 帧标签，仅监督 key。后续可尝试加 ref 自蒸馏/一致性损失
 - 时序长度：默认 `num_ref_frames=4` 是显存/精度的折中，论文复现建议在显存允许下扫到 8 或 16
