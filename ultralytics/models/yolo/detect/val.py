@@ -14,6 +14,24 @@ from ultralytics.utils.metrics import ConfusionMatrix, DetMetrics, box_iou
 from ultralytics.utils.plotting import output_to_target, plot_images
 
 
+def _get_detect_head(model):
+    """Return the final Detect-like head from raw, EMA, or AutoBackend-wrapped models."""
+    from ultralytics.utils.torch_utils import de_parallel
+
+    module = de_parallel(model)
+    for _ in range(4):
+        inner = getattr(module, "model", None)
+        if inner is None:
+            return None
+        try:
+            return inner[-1]
+        except (TypeError, KeyError):
+            if inner is module:
+                return None
+            module = de_parallel(inner)
+    return None
+
+
 class DetectionValidator(BaseValidator):
     """
     A class extending the BaseValidator class for validation based on a detection model.
@@ -54,8 +72,8 @@ class DetectionValidator(BaseValidator):
         # standard Detect path. Still, propagate the layout so the head knows.
         if "clip_layout" in batch and self.model is not None:
             from ultralytics.nn.modules import Detect_VID
-            from ultralytics.utils.torch_utils import de_parallel
-            head = de_parallel(self.model).model[-1]
+
+            head = _get_detect_head(self.model)
             if isinstance(head, Detect_VID):
                 cl = batch["clip_layout"].view(-1)
                 head.clip_layout = (int(cl[0].item()), int(cl[1].item()))
