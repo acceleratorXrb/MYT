@@ -2,8 +2,9 @@
 """Video clip dataset for YOLOV-style temporal feature aggregation training.
 
 Each `__getitem__` returns a "clip" of (1 key frame + N reference frames) drawn
-from the same video sequence. Ground-truth labels are kept only for the key
-frame; references are unlabeled context. The collate function flattens the
+from the same video sequence. Ground-truth labels are kept for the key frame
+and, optionally, for reference frames so Detect_VID can use auxiliary ref loss.
+The collate function flattens the
 clip layout to `(B*T, 3, H, W)` so the unmodified Mamba-YOLO backbone can run
 without changes, and stashes `clip_layout=(B, T)` in the batch dict.
 
@@ -148,18 +149,37 @@ class VIDClipDataset(YOLODataset):
             # Promote key-only to a 1-frame clip
             key_sample["img"] = key_sample["img"].unsqueeze(0)  # (1, 3, H, W)
             key_sample["clip_T"] = 1
+            key_sample["ref_cls"] = torch.zeros((0, 1), dtype=key_sample["cls"].dtype)
+            key_sample["ref_bboxes"] = torch.zeros((0, 4), dtype=key_sample["bboxes"].dtype)
+            key_sample["ref_batch_idx"] = torch.zeros((0,), dtype=key_sample["batch_idx"].dtype)
             return key_sample
 
         ref_idxs = self._sample_refs(idx)
         ref_imgs = []
-        for r_idx in ref_idxs:
+        ref_cls = []
+        ref_bboxes = []
+        ref_batch_idx = []
+        for ref_pos, r_idx in enumerate(ref_idxs):
             r_sample = self._get_sync_aug_sample(r_idx, aug_seed)
             ref_imgs.append(r_sample["img"])  # (3, H, W) tensor
+            if r_sample.get("cls") is not None and len(r_sample["cls"]):
+                ref_cls.append(r_sample["cls"])
+                ref_bboxes.append(r_sample["bboxes"])
+                ref_batch_idx.append(torch.full((len(r_sample["cls"]),), ref_pos, dtype=r_sample["batch_idx"].dtype))
 
         # Stack: key first, then refs -> (T, 3, H, W)
         clip = torch.stack([key_sample["img"]] + ref_imgs, dim=0)
         key_sample["img"] = clip
         key_sample["clip_T"] = clip.shape[0]
+        key_sample["ref_cls"] = (
+            torch.cat(ref_cls, 0) if ref_cls else torch.zeros((0, 1), dtype=key_sample["cls"].dtype)
+        )
+        key_sample["ref_bboxes"] = (
+            torch.cat(ref_bboxes, 0) if ref_bboxes else torch.zeros((0, 4), dtype=key_sample["bboxes"].dtype)
+        )
+        key_sample["ref_batch_idx"] = (
+            torch.cat(ref_batch_idx, 0) if ref_batch_idx else torch.zeros((0,), dtype=key_sample["batch_idx"].dtype)
+        )
         return key_sample
 
     @staticmethod
@@ -184,6 +204,19 @@ class VIDClipDataset(YOLODataset):
         merged_boxes = torch.cat(boxes, 0) if boxes else torch.zeros((0, 4), dtype=samples[0]["bboxes"].dtype)
         return merged_cls, merged_boxes
 
+    @staticmethod
+    def _merge_ref_label_tensors(samples: list[dict], boxes: list[torch.Tensor] | None = None):
+        cls = [s["ref_cls"] for s in samples if s.get("ref_cls") is not None and len(s["ref_cls"])]
+        merged_cls = torch.cat(cls, 0) if cls else torch.zeros((0, 1), dtype=samples[0]["cls"].dtype)
+        if boxes is None:
+            boxes = [s["ref_bboxes"] for s in samples if s.get("ref_bboxes") is not None and len(s["ref_bboxes"])]
+        else:
+            boxes = [b for b in boxes if b is not None and len(b)]
+        merged_boxes = torch.cat(boxes, 0) if boxes else torch.zeros((0, 4), dtype=samples[0]["bboxes"].dtype)
+        batch_idx = [s["ref_batch_idx"] for s in samples if s.get("ref_batch_idx") is not None and len(s["ref_batch_idx"])]
+        merged_batch_idx = torch.cat(batch_idx, 0) if batch_idx else torch.zeros((0,), dtype=samples[0]["batch_idx"].dtype)
+        return merged_cls, merged_boxes, merged_batch_idx
+
     def _apply_clip_mosaic(self, sample: dict):
         """Apply synchronized 2x2 mosaic to whole clips after per-frame transforms."""
         indexes = [random.randint(0, len(self) - 1) for _ in range(3)]
@@ -193,6 +226,7 @@ class VIDClipDataset(YOLODataset):
         tile_h, tile_w = H // 2, W // 2
         out = torch.full_like(clip, 114)
         boxes = []
+        ref_boxes = []
         placements = ((0, 0), (tile_w, 0), (0, tile_h), (tile_w, tile_h))
 
         for s, (x0, y0) in zip(samples, placements):
@@ -200,9 +234,11 @@ class VIDClipDataset(YOLODataset):
             tile = tile.round().clamp_(0, 255).to(dtype=clip.dtype)
             out[:, :, y0 : y0 + tile_h, x0 : x0 + tile_w] = tile
             boxes.append(self._shift_scale_boxes(s["bboxes"], x0, y0, tile_w, tile_h, W, H))
+            ref_boxes.append(self._shift_scale_boxes(s["ref_bboxes"], x0, y0, tile_w, tile_h, W, H))
 
         sample["img"] = out
         sample["cls"], sample["bboxes"] = self._merge_label_tensors(samples, boxes)
+        sample["ref_cls"], sample["ref_bboxes"], sample["ref_batch_idx"] = self._merge_ref_label_tensors(samples, ref_boxes)
         if "batch_idx" in sample:
             sample["batch_idx"] = torch.zeros((len(sample["cls"]),), dtype=sample["batch_idx"].dtype)
         return sample
@@ -214,6 +250,7 @@ class VIDClipDataset(YOLODataset):
         mixed = sample["img"].float() * r + other["img"].float() * (1.0 - r)
         sample["img"] = mixed.round().clamp_(0, 255).to(dtype=sample["img"].dtype)
         sample["cls"], sample["bboxes"] = self._merge_label_tensors([sample, other])
+        sample["ref_cls"], sample["ref_bboxes"], sample["ref_batch_idx"] = self._merge_ref_label_tensors([sample, other])
         if "batch_idx" in sample:
             sample["batch_idx"] = torch.zeros((len(sample["cls"]),), dtype=sample["batch_idx"].dtype)
         return sample
@@ -275,7 +312,7 @@ class VIDClipDataset(YOLODataset):
                 new_batch[k] = stacked.view(B * T, *stacked.shape[2:])
             elif k == "clip_T":
                 continue  # consumed
-            elif k in {"masks", "keypoints", "bboxes", "cls", "segments", "obb"}:
+            elif k in {"masks", "keypoints", "bboxes", "cls", "segments", "obb", "ref_bboxes", "ref_cls"}:
                 new_batch[k] = torch.cat(value, 0)
             else:
                 new_batch[k] = list(value)
@@ -287,6 +324,14 @@ class VIDClipDataset(YOLODataset):
         for i in range(len(bi)):
             bi[i] = bi[i] + i
         new_batch["batch_idx"] = torch.cat(bi, 0) if bi else torch.zeros(0)
+
+        # ref_batch_idx indexes auxiliary predictions over flattened ref frames:
+        # image id = sample_index * (T - 1) + ref_position.
+        rbi = list(new_batch.get("ref_batch_idx", []))
+        if T > 1:
+            for i in range(len(rbi)):
+                rbi[i] = rbi[i] + i * (T - 1)
+        new_batch["ref_batch_idx"] = torch.cat(rbi, 0) if rbi else torch.zeros(0)
 
         # Stash clip layout for the trainer / Detect_VID head
         new_batch["clip_layout"] = torch.tensor([B, T], dtype=torch.long)

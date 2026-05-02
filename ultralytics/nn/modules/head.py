@@ -121,6 +121,7 @@ class Detect_VID(Detect):
         )
         self.num_ref_frames = num_ref_frames
         self.clip_layout: tuple[int, int] | None = None  # (B, T); set by trainer
+        self.aux_outputs: list[torch.Tensor] | None = None  # ref-frame predictions for auxiliary loss
         # streaming inference buffer (per detection level)
         self._stream_buffers: list[list[torch.Tensor]] | None = None
 
@@ -138,14 +139,17 @@ class Detect_VID(Detect):
         """Run the final 1x1 projection of cv3[i]."""
         return self.cv3[i][2](pre)
 
-    def _aggregate_clip(self, i: int, x_i: torch.Tensor, B: int, T: int) -> torch.Tensor:
+    def _aggregate_clip(
+        self, i: int, x_i: torch.Tensor, B: int, T: int, return_aux: bool = False
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor | None]:
         """Clip-mode: input `(B*T, C, H, W)`, output key-frame `(B, no, H, W)`."""
         reg_full = self.cv2[i](x_i)                                 # (B*T, 4*reg_max, H, W)
         pre_full = self._cv3_pre(i, x_i)                            # (B*T, c3, H, W)
 
         if T <= 1:
             cls_out = self._cv3_cls(i, pre_full)
-            return torch.cat((reg_full, cls_out), 1)
+            out = torch.cat((reg_full, cls_out), 1)
+            return (out, None) if return_aux else out
 
         # reshape to (B, T, ...)
         Cp, H, W = pre_full.shape[1:]
@@ -161,8 +165,18 @@ class Detect_VID(Detect):
         cls_out = self._cv3_cls(i, agg_pre)                         # (B, nc, H, W)
 
         Cr = reg_full.shape[1]
-        reg_key = reg_full.view(B, T, Cr, H, W)[:, 0]               # (B, 4*reg_max, H, W)
-        return torch.cat((reg_key, cls_out), 1)
+        reg_clip = reg_full.view(B, T, Cr, H, W)
+        reg_key = reg_clip[:, 0]                                    # (B, 4*reg_max, H, W)
+        key_out = torch.cat((reg_key, cls_out), 1)
+        if not return_aux:
+            return key_out
+
+        # Auxiliary ref detection uses the same unaggregated branches, so refs
+        # remain supervised as ordinary single-frame detections.
+        ref_reg = reg_clip[:, 1:].reshape(B * (T - 1), Cr, H, W)
+        ref_cls = cls_clip[:, 1:].reshape(B * (T - 1), self.nc, H, W)
+        ref_out = torch.cat((ref_reg, ref_cls), 1)
+        return key_out, ref_out
 
     def _aggregate_stream(self, i: int, x_i: torch.Tensor) -> torch.Tensor:
         """Streaming-mode: input `(B, C, H, W)` (single frame). Use rolling buffer."""
@@ -193,16 +207,26 @@ class Detect_VID(Detect):
 
     def forward(self, x):
         """Detect_VID forward: clip-mode if clip_layout set, else streaming."""
+        self.aux_outputs = None
         if self.clip_layout is not None:
             B, T = self.clip_layout
         else:
             B, T = x[0].shape[0], 1
 
+        aux_outputs = []
         for i in range(self.nl):
             if self.clip_layout is not None or self.training:
-                x[i] = self._aggregate_clip(i, x[i], B, T)
+                out = self._aggregate_clip(i, x[i], B, T, return_aux=self.training)
+                if self.training:
+                    x[i], aux_i = out
+                    if aux_i is not None:
+                        aux_outputs.append(aux_i)
+                else:
+                    x[i] = out
             else:
                 x[i] = self._aggregate_stream(i, x[i])
+        if self.training and len(aux_outputs) == self.nl:
+            self.aux_outputs = aux_outputs
 
         if self.training:
             return x

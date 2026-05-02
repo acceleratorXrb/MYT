@@ -197,6 +197,28 @@ def build_extra_eval_callback(opt):
     return on_model_save
 
 
+def build_fam_warmup_callback(opt):
+    warmup_epochs = float(opt.fam_warmup_epochs or 0.0)
+    alpha_target = float(opt.fam_alpha_target)
+
+    def on_train_epoch_start(trainer):
+        if warmup_epochs <= 0.0:
+            return
+        epoch = int(trainer.epoch)
+        if epoch >= warmup_epochs:
+            return
+        denom = max(warmup_epochs - 1.0, 1.0)
+        ratio = min(max(epoch / denom, 0.0), 1.0)
+        alpha = alpha_target * ratio
+        from ultralytics.nn.modules.yolov_fam import set_alpha_warmup
+
+        set_alpha_warmup(trainer.model, alpha)
+        if epoch == 0 or epoch == int(warmup_epochs) - 1:
+            print(f"[fam-warmup] epoch={epoch + 1} alpha={alpha:.6g} target={alpha_target}", flush=True)
+
+    return on_train_epoch_start
+
+
 def resolve_dataset_yaml(path, project, data_task="auto"):
     """Materialize project-local dataset roots as absolute paths for Ultralytics."""
     data_path = Path(resolve_path(path))
@@ -242,6 +264,7 @@ def parse_opt():
     parser.add_argument('--data', type=str, default='ultralytics/cfg/datasets/VisDrone-VID.yaml', help='dataset.yaml path')
     parser.add_argument('--config', type=str, default='ultralytics/cfg/models/mamba-yolo/Mamba-YOLO-T-VID.yaml', help='model yaml path')
     parser.add_argument('--weights', type=str, default='', help='checkpoint path for val/test/predict/export or fine-tuning')
+    parser.add_argument('--init_weights', type=str, default='', help='partial checkpoint initialization for training a YAML model')
     parser.add_argument('--batch_size', type=int, default=16, help='batch size')
     parser.add_argument('--imgsz', '--img', '--img-size', type=int, default=640, help='inference size (pixels)')
     parser.add_argument('--task', default='train', help='train, val, test, predict or export')
@@ -310,6 +333,9 @@ def parse_opt():
     parser.add_argument('--num_ref_frames', type=int, default=4, help='reference frames per clip for VIDClipDataset (0 disables FAM)')
     parser.add_argument('--clip_stride', type=int, default=1, help='temporal stride between sampled refs')
     parser.add_argument('--ref_sample', default='uniform_local', choices=['uniform_local', 'uniform_global'], help='ref-frame sampling strategy')
+    parser.add_argument('--ref_aux_loss', type=float, default=0.0, help='auxiliary detection loss weight for reference frames')
+    parser.add_argument('--fam_warmup_epochs', type=float, default=0.0, help='linearly warm FAM alpha for this many epochs; 0 disables')
+    parser.add_argument('--fam_alpha_target', type=float, default=1.0, help='target FAM alpha value at the end of warmup')
     parser.add_argument('--debug_clip_shape', action='store_true', help='print the first training batch image shape and clip layout')
     parser.add_argument('--debug_clip_aug', action='store_true', help='print first few VID clip augmentation decisions')
     # Optional heavier video metrics, run after checkpoint save every N epochs.
@@ -348,6 +374,9 @@ if __name__ == '__main__':
         "num_ref_frames": opt.num_ref_frames,
         "clip_stride": opt.clip_stride,
         "ref_sample": opt.ref_sample,
+        "ref_aux_loss": opt.ref_aux_loss,
+        "fam_warmup_epochs": opt.fam_warmup_epochs,
+        "fam_alpha_target": opt.fam_alpha_target,
         "debug_clip_shape": opt.debug_clip_shape,
         "debug_clip_aug": opt.debug_clip_aug,
     }
@@ -370,6 +399,12 @@ if __name__ == '__main__':
     model_path = resolve_path(opt.weights) if opt.weights else resolve_path(opt.config)
     model = YOLO(model_path)
     if task == "train":
+        if opt.init_weights:
+            init_weights = resolve_path(opt.init_weights)
+            print(f"[init-weights] loading partial weights from {init_weights}", flush=True)
+            model.load(init_weights)
+        if opt.fam_warmup_epochs > 0:
+            model.add_callback("on_train_epoch_start", build_fam_warmup_callback(opt))
         if opt.extra_eval_period > 0:
             model.add_callback("on_model_save", build_extra_eval_callback(opt))
         args["resume"] = opt.resume

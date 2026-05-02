@@ -251,13 +251,36 @@ class v8DetectionLoss:
 class v8VIDDetectionLoss(v8DetectionLoss):
     """Detection loss for clip-mode training with the Detect_VID head.
 
-    The Detect_VID head emits key-frame-only outputs (shape `(B, no, H, W)`),
-    so the underlying detection loss math is unchanged. This subclass exists
-    as a routing marker and a future hook point for adding clip-aware terms
-    (e.g. KL between aggregated and non-aggregated key cls logits).
+    The Detect_VID head emits key-frame outputs as the main prediction and may
+    cache unaggregated ref-frame predictions for auxiliary supervision. The
+    auxiliary branch reuses the standard YOLO detection loss and is weighted by
+    `hyp.ref_aux_loss`.
     """
 
-    pass
+    def __init__(self, model):
+        super().__init__(model)
+        self.model = model
+
+    def __call__(self, preds, batch):
+        total_loss, loss_items = super().__call__(preds, batch)
+        aux_gain = float(getattr(self.hyp, "ref_aux_loss", 0.0) or 0.0)
+        if aux_gain <= 0.0:
+            return total_loss, loss_items
+
+        head = self.model.model[-1]
+        aux_preds = getattr(head, "aux_outputs", None)
+        if not aux_preds or "ref_cls" not in batch or "ref_bboxes" not in batch or "ref_batch_idx" not in batch:
+            return total_loss, loss_items
+        if batch["ref_cls"].numel() == 0:
+            return total_loss, loss_items
+
+        aux_batch = {
+            "batch_idx": batch["ref_batch_idx"],
+            "cls": batch["ref_cls"],
+            "bboxes": batch["ref_bboxes"],
+        }
+        aux_total, aux_items = super().__call__(aux_preds, aux_batch)
+        return total_loss + aux_gain * aux_total, loss_items + aux_gain * aux_items
 
 
 class v8SegmentationLoss(v8DetectionLoss):

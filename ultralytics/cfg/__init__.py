@@ -105,6 +105,9 @@ CFG_FLOAT_KEYS = {  # integer or float arguments, i.e. x=2 and x=2.0
     "time",
     "workspace",
     "batch",
+    "ref_aux_loss",
+    "fam_warmup_epochs",
+    "fam_alpha_target",
 }
 CFG_FRACTION_KEYS = {  # fractional float arguments with 0.0<=values<=1.0
     "dropout",
