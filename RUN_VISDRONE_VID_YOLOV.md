@@ -76,7 +76,7 @@ python mbyolo_train.py \
     --amp \
     --num_ref_frames 4 \
     --clip_stride 1 \
-    --ref_sample uniform_local \
+    --ref_sample adjacent \
     --project output_dir/visdrone_vid \
     --name yolov_t_R4
 ```
@@ -106,8 +106,8 @@ cls flicker、ByteTrack 轨迹导出和 MOT identity 指标；训练过程中不
 | 参数 | 含义 | 默认 | 推荐扫描范围 |
 |---|---|---|---|
 | `--num_ref_frames` | 每个 clip 的 ref 帧数 | 4 | {0, 4, 8, 16} |
-| `--clip_stride` | uniform_local 的时间步长 | 1 | {1, 2, 4} |
-| `--ref_sample` | ref 帧采样策略 | uniform_local | {uniform_local, uniform_global} |
+| `--clip_stride` | ref 帧采样时间步长 | 1 | {1, 2, 4} |
+| `--ref_sample` | ref 帧采样策略 | adjacent | {adjacent, uniform_local, uniform_global} |
 
 ## 4. 评估
 
@@ -184,9 +184,10 @@ done
 
 `N=0` 退化为 FAM 恒等（α 由训练决定，但起点为 0）；用作 sanity check 验证训练流程在 clip 维度退化时与基线行为一致。
 
-`uniform_local` vs `uniform_global` 对照：
+`adjacent` vs `uniform_local` vs `uniform_global` 对照：
 
 ```bash
+python mbyolo_train.py ... --ref_sample adjacent --name yolov_t_adjacent
 python mbyolo_train.py ... --ref_sample uniform_local --name yolov_t_local
 python mbyolo_train.py ... --ref_sample uniform_global --name yolov_t_global
 ```
@@ -203,5 +204,5 @@ python mbyolo_train.py ... --ref_sample uniform_global --name yolov_t_global
 ## 8. 已知限制
 
 - 增广策略：clip 内为保持 key-ref 几何对应，仍关闭 mosaic/mixup/copy_paste；affine/perspective/flip/HSV/BGR 已恢复为 clip 内同步随机参数。相比单帧基线，clip-mosaic/clip-mixup 仍未实现
-- Ref 帧标签：当前实现丢弃 ref 帧标签，仅监督 key。后续可尝试加 ref 自蒸馏/一致性损失
+- Ref 帧标签：当前已支持 ref 辅助检测 loss，可通过 `--ref_aux_loss` 控制权重
 - 时序长度：默认 `num_ref_frames=4` 是显存/精度的折中，论文复现建议在显存允许下扫到 8 或 16

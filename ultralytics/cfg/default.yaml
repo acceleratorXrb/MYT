@@ -122,8 +122,8 @@ crop_fraction: 1.0 # (float) image crop fraction for classification (0.1-1), 1.0
 
 # VID clip-mode settings (consumed by VIDClipDataset when data yaml has task: vid)
 num_ref_frames: 4 # (int) reference frames per clip; 0 disables FAM
-clip_stride: 1 # (int) temporal stride between sampled refs in uniform_local mode
-ref_sample: uniform_local # (str) ref-frame sampling: uniform_local | uniform_global
+clip_stride: 1 # (int) temporal stride between sampled refs
+ref_sample: adjacent # (str) ref-frame sampling: adjacent | uniform_local | uniform_global
 ref_aux_loss: 0.0 # (float) auxiliary detection loss weight for reference frames in VID clip training
 fam_warmup_epochs: 0.0 # (float) epochs to linearly warm Detect_VID FAM alpha from 0 to target; 0 disables
 fam_alpha_target: 1.0 # (float) target FAM alpha value at the end of warmup

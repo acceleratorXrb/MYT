@@ -32,9 +32,10 @@ class VIDClipDataset(YOLODataset):
     """YOLO video clip dataset for VID training.
 
     Args:
-        num_ref_frames: number of reference frames per clip (refs unlabeled).
-        clip_stride: temporal stride between sampled refs (in `uniform_local`).
-        ref_sample: 'uniform_local' (within +/-W of key) or 'uniform_global'
+        num_ref_frames: number of reference frames per clip.
+        clip_stride: temporal stride between sampled refs.
+        ref_sample: 'adjacent' (deterministic neighboring frames),
+            'uniform_local' (within +/-W of key), or 'uniform_global'
             (anywhere in the same sequence).
         seq_key: 'parent' (group by parent dir name) or 'stem_prefix' (group
             by leading non-digit prefix in basename).
@@ -45,7 +46,7 @@ class VIDClipDataset(YOLODataset):
         *args,
         num_ref_frames: int = 4,
         clip_stride: int = 1,
-        ref_sample: str = "uniform_local",
+        ref_sample: str = "adjacent",
         seq_key: str = "parent",
         debug_clip_aug: bool = False,
         **kwargs,
@@ -56,8 +57,8 @@ class VIDClipDataset(YOLODataset):
         self._vid_mixup = 0.0
         self._debug_clip_aug = bool(debug_clip_aug)
         self._debug_clip_aug_printed = 0
-        if ref_sample not in {"uniform_local", "uniform_global"}:
-            raise ValueError(f"ref_sample must be uniform_local|uniform_global, got {ref_sample}")
+        if ref_sample not in {"adjacent", "uniform_local", "uniform_global"}:
+            raise ValueError(f"ref_sample must be adjacent|uniform_local|uniform_global, got {ref_sample}")
         self._vid_ref_sample = ref_sample
         self._vid_seq_key = seq_key
         super().__init__(*args, **kwargs)
@@ -99,6 +100,32 @@ class VIDClipDataset(YOLODataset):
                 self.idx2seqpos[idx] = (name, pos)
 
     # ----- reference sampling -----
+    def _sample_adjacent_refs(self, seq_idxs: list[int], key_pos: int, num_refs: int) -> list[int]:
+        """Pick deterministic neighbor refs, e.g. N=4 -> t-2,t-1,t+1,t+2."""
+        if len(seq_idxs) <= 1:
+            return [seq_idxs[key_pos]] * num_refs
+
+        stride = self._vid_stride
+        left_count = num_refs // 2
+        right_count = num_refs - left_count
+        desired_offsets = list(range(-left_count, 0)) + list(range(1, right_count + 1))
+
+        picked_pos = []
+        for offset in desired_offsets:
+            pos = key_pos + offset * stride
+            if 0 <= pos < len(seq_idxs) and pos != key_pos and pos not in picked_pos:
+                picked_pos.append(pos)
+
+        if len(picked_pos) < num_refs:
+            candidates = [p for p in range(len(seq_idxs)) if p != key_pos and p not in picked_pos]
+            candidates.sort(key=lambda p: (abs(p - key_pos), p))
+            picked_pos.extend(candidates[: num_refs - len(picked_pos)])
+
+        if len(picked_pos) < num_refs:
+            picked_pos.extend([picked_pos[-1] if picked_pos else key_pos] * (num_refs - len(picked_pos)))
+
+        return [seq_idxs[p] for p in picked_pos[:num_refs]]
+
     def _sample_refs(self, idx: int) -> list[int]:
         if self._vid_num_ref == 0:
             return []
@@ -109,7 +136,9 @@ class VIDClipDataset(YOLODataset):
         L = len(seq_idxs)
         N = self._vid_num_ref
 
-        if self._vid_ref_sample == "uniform_global":
+        if self._vid_ref_sample == "adjacent":
+            return self._sample_adjacent_refs(seq_idxs, key_pos, N)
+        elif self._vid_ref_sample == "uniform_global":
             choices_pos = [i for i in range(L) if i != key_pos]
         else:
             W = N * self._vid_stride

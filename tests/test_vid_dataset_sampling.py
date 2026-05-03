@@ -111,6 +111,27 @@ def test_ref_sampling_local_window_bounds(fake_visdrone_root):
             assert abs(r_pos - key_pos) <= N * S
 
 
+def test_ref_sampling_adjacent_uses_neighbor_frames(fake_visdrone_root):
+    root, _ = fake_visdrone_root
+    ds = _build_dataset(root, num_ref_frames=4, ref_sample="adjacent")
+    seq_name = "uav0000001_seq"
+    key_pos = 5
+    idx = ds.seqs[seq_name][key_pos]
+    ref_idxs = ds._sample_refs(idx)
+    ref_pos = [ds.seqs[seq_name].index(r) for r in ref_idxs]
+    assert ref_pos == [3, 4, 6, 7]
+
+
+def test_ref_sampling_adjacent_fills_edges_from_available_neighbors(fake_visdrone_root):
+    root, _ = fake_visdrone_root
+    ds = _build_dataset(root, num_ref_frames=4, ref_sample="adjacent")
+    seq_name = "uav0000001_seq"
+    idx = ds.seqs[seq_name][0]
+    ref_idxs = ds._sample_refs(idx)
+    ref_pos = [ds.seqs[seq_name].index(r) for r in ref_idxs]
+    assert ref_pos == [1, 2, 3, 4]
+
+
 def test_collate_emits_clip_layout(fake_visdrone_root):
     root, _ = fake_visdrone_root
     ds = _build_dataset(root, num_ref_frames=2)
