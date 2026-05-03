@@ -5,6 +5,8 @@ import argparse
 import re
 from pathlib import Path
 
+from temporal_state import reset_video_state
+
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp"}
 
@@ -20,7 +22,7 @@ def parse_args():
     )
     parser.add_argument("--out", type=Path, required=True, help="Output directory for per-sequence txt files.")
     parser.add_argument("--imgsz", type=int, default=640)
-    parser.add_argument("--batch", type=int, default=16)
+    parser.add_argument("--batch", type=int, default=16, help="Kept for CLI compatibility; VID streaming export uses batch=1.")
     parser.add_argument("--device", default="0")
     parser.add_argument("--conf", type=float, default=0.001, help="Low confidence threshold for official AP evaluation.")
     parser.add_argument("--iou", type=float, default=0.7)
@@ -48,11 +50,6 @@ def resolve_sequence_root(path):
     return path
 
 
-def chunks(items, size):
-    for i in range(0, len(items), size):
-        yield items[i : i + size]
-
-
 def xyxy_to_xywh(xyxy, width, height):
     x1, y1, x2, y2 = xyxy
     x1 = max(0.0, min(float(x1), width))
@@ -75,39 +72,42 @@ def main():
         raise FileNotFoundError(f"No sequence directories found in {seq_root}")
 
     for seq_dir in seq_dirs:
+        reset_video_state(model)
         frames = image_files(seq_dir)
         lines = []
-        for frame_batch in chunks(frames, args.batch):
+        for fallback, frame_path in enumerate(frames, start=1):
             results = model.predict(
-                source=[str(p) for p in frame_batch],
+                source=str(frame_path),
                 imgsz=args.imgsz,
                 conf=args.conf,
                 iou=args.iou,
                 device=args.device,
-                batch=len(frame_batch),
+                batch=1,
                 save=False,
                 verbose=False,
             )
-            for fallback, (frame_path, result) in enumerate(zip(frame_batch, results), start=1):
-                height, width = result.orig_shape
-                index = frame_index(frame_path, fallback)
-                boxes = result.boxes
-                if boxes is None or len(boxes) == 0:
-                    continue
-                xyxy = boxes.xyxy.cpu().numpy()
-                confs = boxes.conf.cpu().numpy()
-                classes = boxes.cls.cpu().numpy().astype(int)
-                order = confs.argsort()[::-1]
-                for row_index in order:
-                    box = xyxy[row_index]
-                    conf = confs[row_index]
-                    cls = classes[row_index]
-                    left, top, box_width, box_height = xyxy_to_xywh(box, width, height)
-                    category = cls + 1
-                    lines.append(
-                        f"{index},-1,{left:.2f},{top:.2f},{box_width:.2f},{box_height:.2f},"
-                        f"{float(conf):.6f},{category},-1,-1\n"
-                    )
+            if not results:
+                continue
+            result = results[0]
+            height, width = result.orig_shape
+            index = frame_index(frame_path, fallback)
+            boxes = result.boxes
+            if boxes is None or len(boxes) == 0:
+                continue
+            xyxy = boxes.xyxy.cpu().numpy()
+            confs = boxes.conf.cpu().numpy()
+            classes = boxes.cls.cpu().numpy().astype(int)
+            order = confs.argsort()[::-1]
+            for row_index in order:
+                box = xyxy[row_index]
+                conf = confs[row_index]
+                cls = classes[row_index]
+                left, top, box_width, box_height = xyxy_to_xywh(box, width, height)
+                category = cls + 1
+                lines.append(
+                    f"{index},-1,{left:.2f},{top:.2f},{box_width:.2f},{box_height:.2f},"
+                    f"{float(conf):.6f},{category},-1,-1\n"
+                )
 
         output = args.out / f"{seq_dir.name}.txt"
         output.write_text("".join(lines), encoding="utf-8")

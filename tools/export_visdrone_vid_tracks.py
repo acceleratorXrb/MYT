@@ -5,6 +5,8 @@ import argparse
 import re
 from pathlib import Path
 
+from temporal_state import reset_video_state
+
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp"}
 
@@ -65,12 +67,6 @@ def format_track_line(frame_id, track_id, xyxy, score, cls, width, height):
     )
 
 
-def reset_model_trackers(model):
-    predictor = getattr(model, "predictor", None)
-    for tracker in getattr(predictor, "trackers", []) if predictor is not None else []:
-        tracker.reset()
-
-
 def export_tracks(weights, source, out, tracker, imgsz=640, device="0", conf=0.1, iou=0.7):
     from ultralytics import YOLO
 
@@ -82,7 +78,7 @@ def export_tracks(weights, source, out, tracker, imgsz=640, device="0", conf=0.1
         raise FileNotFoundError(f"No sequence directories found in {seq_root}")
 
     for seq_dir in seq_dirs:
-        reset_model_trackers(model)
+        reset_video_state(model, trackers=True)
         frames = image_files(seq_dir)
         lines = []
         for fallback, frame_path in enumerate(frames, start=1):

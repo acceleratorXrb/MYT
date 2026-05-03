@@ -72,8 +72,8 @@ class FeatureAggregationModule(nn.Module):
         R = ref_feat.shape[1]
         HW = H * W
 
-        # ---- objectness proxy: spatial-max over class logits ----
-        ref_score = ref_logits.amax(dim=2)                       # (B, R, H, W)
+        # ---- objectness proxy: spatial-max over class probabilities ----
+        ref_score = ref_logits.sigmoid().amax(dim=2)             # (B, R, H, W)
         ref_score_flat = ref_score.reshape(B, R * HW)            # (B, R*HW)
 
         # ---- top-K selection per batch ----
@@ -82,6 +82,9 @@ class FeatureAggregationModule(nn.Module):
 
         # mask out tokens below conf_thr (keep the slot but zero its weight later)
         valid_mask = topk_vals > self.conf_thr                   # (B, K)
+        valid_any = valid_mask.any(dim=1)                        # (B,)
+        if not valid_any.any():
+            return key_feat
 
         # ---- gather ref tokens ----
         ref_tok_full = ref_feat.permute(0, 1, 3, 4, 2).reshape(B, R * HW, C)  # (B, R*HW, C)
@@ -100,11 +103,11 @@ class FeatureAggregationModule(nn.Module):
         k_n = F.normalize(k, dim=-1)
         aff = torch.bmm(q_n, k_n.transpose(1, 2))                # (B, HW, K)
 
-        # mask invalid ref tokens by setting their logit to -inf
+        # mask invalid ref tokens by setting their logit to -inf. Rows with no
+        # valid refs are temporarily filled with zeros and restored to key below.
         if not valid_mask.all():
             aff = aff.masked_fill(~valid_mask.unsqueeze(1), float("-inf"))
-            # protect against rows where all refs are invalid
-            row_all_invalid = (~valid_mask).all(dim=1, keepdim=True)  # (B, 1)
+            row_all_invalid = ~valid_any.view(B, 1)              # (B, 1)
             aff = torch.where(
                 row_all_invalid.unsqueeze(1).expand_as(aff),
                 torch.zeros_like(aff),
@@ -115,7 +118,10 @@ class FeatureAggregationModule(nn.Module):
         agg = torch.bmm(w, v)                                    # (B, HW, C)
 
         agg_2d = agg.reshape(B, H, W, C).permute(0, 3, 1, 2).contiguous()
-        return key_feat + self.alpha * agg_2d
+        out = key_feat + self.alpha * agg_2d
+        if not valid_any.all():
+            out = torch.where(valid_any.view(B, 1, 1, 1), out, key_feat)
+        return out
 
     def extra_repr(self) -> str:
         return (
