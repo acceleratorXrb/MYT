@@ -125,7 +125,14 @@ class DetectionTrainer(BaseTrainer):
 
     def get_validator(self):
         """Returns a DetectionValidator for YOLO model validation."""
-        self.loss_names = "box_loss", "cls_loss", "dfl_loss"
+        from ultralytics.nn.modules import Detect_VID
+
+        head = de_parallel(self.model).model[-1]
+        self.loss_names = (
+            ("box_loss", "cls_loss", "dfl_loss", "ref_box_loss", "ref_cls_loss", "ref_dfl_loss")
+            if isinstance(head, Detect_VID) and float(getattr(self.args, "ref_aux_loss", 0.0) or 0.0) > 0.0
+            else ("box_loss", "cls_loss", "dfl_loss")
+        )
         return yolo.detect.DetectionValidator(
             self.test_loader, save_dir=self.save_dir, args=copy(self.args), _callbacks=self.callbacks
         )

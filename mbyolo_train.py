@@ -98,32 +98,43 @@ def build_extra_eval_callback(opt):
         scripts = Path(ROOT) / "tools"
 
         try:
-            steps.append(
-                run_extra_eval_step(
-                    "export_detections",
-                    [
-                        py,
-                        scripts / "export_visdrone_vid_results.py",
-                        "--weights",
-                        weights,
-                        "--source",
-                        official_root,
-                        "--out",
-                        detections_dir,
-                        "--imgsz",
-                        opt.imgsz,
-                        "--batch",
-                        opt.extra_eval_batch,
-                        "--device",
-                        opt.device,
-                        "--conf",
-                        opt.extra_eval_conf,
-                        "--iou",
-                        opt.extra_eval_iou,
-                    ],
-                    strict,
-                )
+            export_script = (
+                scripts / "export_visdrone_vid_clip_results.py"
+                if opt.extra_eval_clip_inference
+                else scripts / "export_visdrone_vid_results.py"
             )
+            export_cmd = [
+                py,
+                export_script,
+                "--weights",
+                weights,
+                "--source",
+                official_root,
+                "--out",
+                detections_dir,
+                "--imgsz",
+                opt.imgsz,
+                "--device",
+                opt.device,
+                "--conf",
+                opt.extra_eval_conf,
+                "--iou",
+                opt.extra_eval_iou,
+            ]
+            if opt.extra_eval_clip_inference:
+                export_cmd.extend(
+                    [
+                        "--num_ref_frames",
+                        opt.num_ref_frames,
+                        "--clip_stride",
+                        opt.clip_stride,
+                        "--ref_sample",
+                        opt.ref_sample if opt.ref_sample in {"adjacent", "causal"} else "adjacent",
+                    ]
+                )
+            else:
+                export_cmd.extend(["--batch", opt.extra_eval_batch])
+            steps.append(run_extra_eval_step("export_detections", export_cmd, strict))
 
             steps.append(
                 run_extra_eval_step(
@@ -332,7 +343,7 @@ def parse_opt():
     # VID clip-mode (consumed by VIDClipDataset when data yaml has task: vid)
     parser.add_argument('--num_ref_frames', type=int, default=4, help='reference frames per clip for VIDClipDataset (0 disables FAM)')
     parser.add_argument('--clip_stride', type=int, default=1, help='temporal stride between sampled refs')
-    parser.add_argument('--ref_sample', default='adjacent', choices=['adjacent', 'uniform_local', 'uniform_global'], help='ref-frame sampling strategy')
+    parser.add_argument('--ref_sample', default='adjacent', choices=['adjacent', 'causal', 'uniform_local', 'uniform_global'], help='ref-frame sampling strategy')
     parser.add_argument('--ref_aux_loss', type=float, default=0.0, help='auxiliary detection loss weight for reference frames')
     parser.add_argument('--fam_warmup_epochs', type=float, default=0.0, help='linearly warm FAM alpha for this many epochs; 0 disables')
     parser.add_argument('--fam_alpha_target', type=float, default=1.0, help='target FAM alpha value at the end of warmup')
@@ -347,6 +358,7 @@ def parse_opt():
     parser.add_argument('--extra_eval_conf', type=float, default=0.001, help='confidence threshold for detection export during extra eval')
     parser.add_argument('--extra_eval_track_conf', type=float, default=0.1, help='confidence threshold for tracking export')
     parser.add_argument('--extra_eval_iou', type=float, default=0.7, help='NMS IoU threshold for extra eval exports')
+    parser.add_argument('--extra_eval_clip_inference', action='store_true', help='export detections with explicit key+ref clip inference instead of streaming')
     parser.add_argument('--extra_eval_strict', action='store_true', help='fail training if an extra-eval step fails')
     opt = parser.parse_args()
     return opt

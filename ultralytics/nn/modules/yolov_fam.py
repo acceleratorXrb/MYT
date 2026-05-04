@@ -45,6 +45,9 @@ class FeatureAggregationModule(nn.Module):
             self.q = nn.Linear(cls_channels, cls_channels, bias=False)
             self.k = nn.Linear(cls_channels, cls_channels, bias=False)
             self.v = nn.Linear(cls_channels, cls_channels, bias=False)
+        self.gate = nn.Conv2d(cls_channels * 2, cls_channels, 1)
+        nn.init.zeros_(self.gate.weight)
+        nn.init.zeros_(self.gate.bias)
 
     def _project(self, proj: nn.Module | None, x: torch.Tensor) -> torch.Tensor:
         return proj(x) if proj is not None else x
@@ -74,11 +77,14 @@ class FeatureAggregationModule(nn.Module):
 
         # ---- objectness proxy: spatial-max over class probabilities ----
         ref_score = ref_logits.sigmoid().amax(dim=2)             # (B, R, H, W)
-        ref_score_flat = ref_score.reshape(B, R * HW)            # (B, R*HW)
+        ref_score_flat = ref_score.reshape(B, R, HW)             # (B, R, HW)
 
-        # ---- top-K selection per batch ----
-        K = min(self.topk, R * HW)
-        topk_vals, topk_idx = ref_score_flat.topk(K, dim=1)      # (B, K)
+        # ---- balanced top-K selection per ref frame ----
+        per_ref_k = max(1, min(HW, self.topk // max(R, 1)))
+        topk_vals, topk_spatial_idx = ref_score_flat.topk(per_ref_k, dim=2)  # (B, R, K)
+        ref_offsets = torch.arange(R, device=ref_score.device).view(1, R, 1) * HW
+        topk_idx = (topk_spatial_idx + ref_offsets).reshape(B, R * per_ref_k)
+        topk_vals = topk_vals.reshape(B, R * per_ref_k)
 
         # mask out tokens below conf_thr (keep the slot but zero its weight later)
         valid_mask = topk_vals > self.conf_thr                   # (B, K)
@@ -88,7 +94,8 @@ class FeatureAggregationModule(nn.Module):
 
         # ---- gather ref tokens ----
         ref_tok_full = ref_feat.permute(0, 1, 3, 4, 2).reshape(B, R * HW, C)  # (B, R*HW, C)
-        gather_idx = topk_idx.unsqueeze(-1).expand(B, K, C)
+        selected_k = topk_idx.shape[1]
+        gather_idx = topk_idx.unsqueeze(-1).expand(B, selected_k, C)
         ref_tok = ref_tok_full.gather(1, gather_idx)             # (B, K, C)
 
         # ---- key tokens ----
@@ -118,7 +125,8 @@ class FeatureAggregationModule(nn.Module):
         agg = torch.bmm(w, v)                                    # (B, HW, C)
 
         agg_2d = agg.reshape(B, H, W, C).permute(0, 3, 1, 2).contiguous()
-        out = key_feat + self.alpha * agg_2d
+        gate = torch.sigmoid(self.gate(torch.cat((key_feat, agg_2d), dim=1)))
+        out = key_feat + self.alpha * gate * (agg_2d - key_feat)
         if not valid_any.all():
             out = torch.where(valid_any.view(B, 1, 1, 1), out, key_feat)
         return out

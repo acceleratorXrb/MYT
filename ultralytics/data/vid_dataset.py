@@ -34,7 +34,8 @@ class VIDClipDataset(YOLODataset):
     Args:
         num_ref_frames: number of reference frames per clip.
         clip_stride: temporal stride between sampled refs.
-        ref_sample: 'adjacent' (deterministic neighboring frames),
+        ref_sample: 'adjacent' (deterministic neighboring frames), 'causal'
+            (deterministic past frames for online streaming),
             'uniform_local' (within +/-W of key), or 'uniform_global'
             (anywhere in the same sequence).
         seq_key: 'parent' (group by parent dir name) or 'stem_prefix' (group
@@ -57,8 +58,8 @@ class VIDClipDataset(YOLODataset):
         self._vid_mixup = 0.0
         self._debug_clip_aug = bool(debug_clip_aug)
         self._debug_clip_aug_printed = 0
-        if ref_sample not in {"adjacent", "uniform_local", "uniform_global"}:
-            raise ValueError(f"ref_sample must be adjacent|uniform_local|uniform_global, got {ref_sample}")
+        if ref_sample not in {"adjacent", "causal", "uniform_local", "uniform_global"}:
+            raise ValueError(f"ref_sample must be adjacent|causal|uniform_local|uniform_global, got {ref_sample}")
         self._vid_ref_sample = ref_sample
         self._vid_seq_key = seq_key
         super().__init__(*args, **kwargs)
@@ -126,6 +127,16 @@ class VIDClipDataset(YOLODataset):
 
         return [seq_idxs[p] for p in picked_pos[:num_refs]]
 
+    def _sample_causal_refs(self, seq_idxs: list[int], key_pos: int, num_refs: int) -> list[int]:
+        """Pick deterministic past refs, e.g. N=4 -> t-4,t-3,t-2,t-1."""
+        if key_pos <= 0:
+            return [seq_idxs[key_pos]] * num_refs
+        picked_pos = []
+        for offset in range(num_refs, 0, -1):
+            pos = key_pos - offset * self._vid_stride
+            picked_pos.append(max(0, pos))
+        return [seq_idxs[p] for p in picked_pos]
+
     def _sample_refs(self, idx: int) -> list[int]:
         if self._vid_num_ref == 0:
             return []
@@ -138,6 +149,8 @@ class VIDClipDataset(YOLODataset):
 
         if self._vid_ref_sample == "adjacent":
             return self._sample_adjacent_refs(seq_idxs, key_pos, N)
+        elif self._vid_ref_sample == "causal":
+            return self._sample_causal_refs(seq_idxs, key_pos, N)
         elif self._vid_ref_sample == "uniform_global":
             choices_pos = [i for i in range(L) if i != key_pos]
         else:

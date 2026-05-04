@@ -107,7 +107,7 @@ cls flicker、ByteTrack 轨迹导出和 MOT identity 指标；训练过程中不
 |---|---|---|---|
 | `--num_ref_frames` | 每个 clip 的 ref 帧数 | 4 | {0, 4, 8, 16} |
 | `--clip_stride` | ref 帧采样时间步长 | 1 | {1, 2, 4} |
-| `--ref_sample` | ref 帧采样策略 | adjacent | {adjacent, uniform_local, uniform_global} |
+| `--ref_sample` | ref 帧采样策略 | adjacent | {adjacent, causal, uniform_local, uniform_global} |
 
 ## 4. 评估
 
@@ -184,10 +184,11 @@ done
 
 `N=0` 退化为 FAM 恒等（α 由训练决定，但起点为 0）；用作 sanity check 验证训练流程在 clip 维度退化时与基线行为一致。
 
-`adjacent` vs `uniform_local` vs `uniform_global` 对照：
+`adjacent` vs `causal` vs `uniform_local` vs `uniform_global` 对照：
 
 ```bash
 python mbyolo_train.py ... --ref_sample adjacent --name yolov_t_adjacent
+python mbyolo_train.py ... --ref_sample causal --name yolov_t_causal
 python mbyolo_train.py ... --ref_sample uniform_local --name yolov_t_local
 python mbyolo_train.py ... --ref_sample uniform_global --name yolov_t_global
 ```
