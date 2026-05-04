@@ -5,6 +5,7 @@ import math
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.nn.init import constant_, xavier_uniform_
 
 from ultralytics.utils.tal import TORCH_1_10, dist2bbox, dist2rbox, make_anchors
@@ -191,8 +192,15 @@ class Detect_VID(Detect):
             buf.append(pre_full.detach())
             return torch.cat((reg_full, cls_out), 1)
 
-        # ref features = entire buffer; build (B, R, C, H, W) and (B, R, nc, H, W)
-        ref_pre = torch.stack(buf, dim=1)                           # (B, R, C, H, W)
+        # Ref features = entire buffer. Predictor letterboxing can change
+        # feature-map shapes between frames, so resize buffered refs to the
+        # current key feature shape before stacking.
+        Hk, Wk = pre_full.shape[-2:]
+        ref_items = [
+            z if z.shape[-2:] == (Hk, Wk) else F.interpolate(z, size=(Hk, Wk), mode="bilinear", align_corners=False)
+            for z in buf
+        ]
+        ref_pre = torch.stack(ref_items, dim=1)                     # (B, R, C, H, W)
         B, R, Cp, H, W = ref_pre.shape
         ref_logits = self._cv3_cls(i, ref_pre.view(B * R, Cp, H, W)).view(B, R, self.nc, H, W)
 
