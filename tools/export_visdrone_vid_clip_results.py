@@ -149,7 +149,7 @@ def main():
             set_clip_layout(yolo.model, (1, len(clip_paths)))
             with torch.inference_mode():
                 pred = yolo.model(tensor)
-            det = ops.non_max_suppression(pred, args.conf, args.iou, max_det=args.max_det)[0]
+            det = ops.non_max_suppression(pred, args.conf, args.iou, max_det=args.max_det, in_place=False)[0]
             if len(det):
                 ops.scale_boxes(tensor.shape[2:], det[:, :4], key_img0.shape)
             height, width = key_img0.shape[:2]

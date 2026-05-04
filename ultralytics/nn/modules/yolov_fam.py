@@ -73,6 +73,16 @@ class FeatureAggregationModule(nn.Module):
 
         B, C, H, W = key_feat.shape
         R = ref_feat.shape[1]
+        if ref_feat.shape[-2:] != (H, W):
+            ref_feat = F.interpolate(
+                ref_feat.reshape(B * R, C, *ref_feat.shape[-2:]), size=(H, W), mode="bilinear", align_corners=False
+            ).view(B, R, C, H, W)
+            ref_logits = F.interpolate(
+                ref_logits.reshape(B * R, ref_logits.shape[2], *ref_logits.shape[-2:]),
+                size=(H, W),
+                mode="bilinear",
+                align_corners=False,
+            ).view(B, R, ref_logits.shape[2], H, W)
         HW = H * W
 
         # ---- objectness proxy: spatial-max over class probabilities ----
