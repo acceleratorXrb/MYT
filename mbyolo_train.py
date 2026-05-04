@@ -152,32 +152,43 @@ def build_extra_eval_callback(opt):
                     strict,
                 )
             )
-            steps.append(
-                run_extra_eval_step(
-                    "export_tracks",
-                    [
-                        py,
-                        scripts / "export_visdrone_vid_tracks.py",
-                        "--weights",
-                        weights,
-                        "--source",
-                        official_root,
-                        "--out",
-                        tracks_dir,
-                        "--tracker",
-                        tracker,
-                        "--imgsz",
-                        opt.imgsz,
-                        "--device",
-                        opt.device,
-                        "--conf",
-                        opt.extra_eval_track_conf,
-                        "--iou",
-                        opt.extra_eval_iou,
-                    ],
-                    strict,
-                )
+            track_export_script = (
+                scripts / "export_visdrone_vid_clip_tracks.py"
+                if opt.extra_eval_clip_inference
+                else scripts / "export_visdrone_vid_tracks.py"
             )
+            track_cmd = [
+                py,
+                track_export_script,
+                "--weights",
+                weights,
+                "--source",
+                official_root,
+                "--out",
+                tracks_dir,
+                "--tracker",
+                tracker,
+                "--imgsz",
+                opt.imgsz,
+                "--device",
+                opt.device,
+                "--conf",
+                opt.extra_eval_track_conf,
+                "--iou",
+                opt.extra_eval_iou,
+            ]
+            if opt.extra_eval_clip_inference:
+                track_cmd.extend(
+                    [
+                        "--num_ref_frames",
+                        opt.num_ref_frames,
+                        "--clip_stride",
+                        opt.clip_stride,
+                        "--ref_sample",
+                        opt.ref_sample if opt.ref_sample in {"adjacent", "causal"} else "adjacent",
+                    ]
+                )
+            steps.append(run_extra_eval_step("export_tracks", track_cmd, strict))
             steps.append(
                 run_extra_eval_step(
                     "mot",
