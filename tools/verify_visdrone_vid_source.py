@@ -7,7 +7,7 @@ from pathlib import Path
 EXPECTED_COUNTS = {
     "train": 24201,
     "val": 2846,
-    "test": 6635,
+    "test-dev": 6635,
 }
 
 EXPECTED_ZIPS = (
