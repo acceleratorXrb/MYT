@@ -122,8 +122,11 @@ class Detect_VID(Detect):
         )
         self.num_ref_frames = num_ref_frames
         self.temporal_fusion = "fam"  # fam | logits | logits_gated | none
+        self.fam_conf_boost = 0.0
+        self.temporal_cls_consistency = 0.0
         self.clip_layout: tuple[int, int] | None = None  # (B, T); set by trainer
         self.aux_outputs: list[torch.Tensor] | None = None  # ref-frame predictions for auxiliary loss
+        self.temporal_consistency_losses: list[torch.Tensor] | None = None
         # streaming inference buffer (per detection level)
         self._stream_buffers: list[list[torch.Tensor]] | None = None
 
@@ -163,6 +166,40 @@ class Detect_VID(Detect):
         center_gate = 1.0 - key_logits.sigmoid().amax(dim=1, keepdim=True)
         return key_logits + alpha * center_gate * ref_mean
 
+    def _ref_conf_boost(self, i: int, key_logits: torch.Tensor, ref_logits: torch.Tensor) -> torch.Tensor:
+        """Positive-only ref confidence compensation for FAM mode.
+
+        This keeps the center-frame logits as the base prediction and only raises
+        classes that adjacent refs support more strongly. It is deliberately
+        asymmetric, so refs cannot suppress a confident center-frame class.
+        """
+        gain = float(getattr(self, "fam_conf_boost", 0.0) or 0.0)
+        if gain <= 0.0 or ref_logits.numel() == 0 or ref_logits.shape[1] == 0:
+            return key_logits
+        alpha = self.fams[i].alpha.to(device=key_logits.device, dtype=key_logits.dtype)
+        ref_prob = ref_logits.sigmoid()
+        ref_conf = ref_prob.amax(dim=2, keepdim=True)
+        ref_weight = ref_conf / ref_conf.sum(dim=1, keepdim=True).clamp_min(1e-6)
+        ref_prob_mean = (ref_prob * ref_weight).sum(dim=1)
+        key_prob = key_logits.sigmoid()
+        center_uncertain = 1.0 - key_prob.amax(dim=1, keepdim=True)
+        boost = torch.relu(ref_prob_mean - key_prob) * center_uncertain
+        return key_logits + gain * alpha * boost
+
+    def _clip_cls_consistency_loss(self, key_logits: torch.Tensor, ref_logits: torch.Tensor) -> torch.Tensor:
+        """Small optional clip-level class-probability consistency regularizer."""
+        gain = float(getattr(self, "temporal_cls_consistency", 0.0) or 0.0)
+        if gain <= 0.0 or ref_logits.numel() == 0 or ref_logits.shape[1] == 0:
+            return key_logits.new_zeros(())
+        key_prob = key_logits.sigmoid()
+        ref_prob = ref_logits.sigmoid().mean(dim=1).detach()
+        with torch.no_grad():
+            key_conf = key_prob.amax(dim=1, keepdim=True)
+            ref_conf = ref_prob.amax(dim=1, keepdim=True)
+            weight = torch.maximum(key_conf, ref_conf).clamp(0.0, 1.0)
+        loss = F.smooth_l1_loss(key_prob, ref_prob, reduction="none").mean(dim=1, keepdim=True)
+        return (loss * weight).sum() / weight.sum().clamp_min(1.0)
+
     def _aggregate_clip(
         self, i: int, x_i: torch.Tensor, B: int, T: int, return_aux: bool = False
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor | None]:
@@ -189,12 +226,15 @@ class Detect_VID(Detect):
         if mode == "fam":
             agg_pre = self.fams[i](key_pre, ref_pre, ref_logits)    # (B, c3, H, W)
             cls_out = self._cv3_cls(i, agg_pre)                     # (B, nc, H, W)
+            cls_out = self._ref_conf_boost(i, cls_out, ref_logits)
         elif mode == "logits":
             cls_out = self._logits_fuse(i, cls_clip[:, 0], ref_logits)
         elif mode == "logits_gated":
             cls_out = self._logits_fuse(i, cls_clip[:, 0], ref_logits, gated=True)
         else:
             cls_out = cls_clip[:, 0]
+        if self.training and self.temporal_consistency_losses is not None:
+            self.temporal_consistency_losses.append(self._clip_cls_consistency_loss(cls_out, ref_logits))
 
         Cr = reg_full.shape[1]
         reg_clip = reg_full.view(B, T, Cr, H, W)
@@ -239,6 +279,7 @@ class Detect_VID(Detect):
         if mode == "fam":
             agg_pre = self.fams[i](pre_full, ref_pre, ref_logits)
             cls_out = self._cv3_cls(i, agg_pre)
+            cls_out = self._ref_conf_boost(i, cls_out, ref_logits)
         elif mode == "logits":
             cls_out = self._logits_fuse(i, self._cv3_cls(i, pre_full), ref_logits)
         elif mode == "logits_gated":
@@ -255,6 +296,7 @@ class Detect_VID(Detect):
     def forward(self, x):
         """Detect_VID forward: clip-mode if clip_layout set, else streaming."""
         self.aux_outputs = None
+        self.temporal_consistency_losses = [] if self.training else None
         if self.clip_layout is not None:
             B, T = self.clip_layout
         else:

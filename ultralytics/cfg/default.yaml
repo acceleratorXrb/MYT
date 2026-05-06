@@ -126,6 +126,9 @@ clip_stride: 1 # (int) temporal stride between sampled refs
 ref_sample: adjacent # (str) ref-frame sampling: adjacent | causal | uniform_local | uniform_global
 ref_aux_loss: 0.0 # (float) auxiliary detection loss weight for reference frames in VID clip training
 temporal_fusion: fam # (str) Detect_VID temporal fusion: fam | logits | logits_gated | none
+fam_conf_boost: 0.0 # (float) positive-only ref confidence boost gain for FAM mode
+fam_spatial_sigma: 0.2 # (float) normalized spatial sigma for local FAM attention; 0 disables
+temporal_cls_consistency: 0.0 # (float) optional clip class-consistency loss gain
 fam_warmup_epochs: 0.0 # (float) epochs to linearly warm Detect_VID FAM alpha from 0 to target; 0 disables
 fam_alpha_target: 1.0 # (float) target FAM alpha value at the end of warmup
 debug_clip_shape: False # (bool) print first training batch image shape and clip layout

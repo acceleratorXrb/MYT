@@ -30,6 +30,7 @@ class FeatureAggregationModule(nn.Module):
         topk: int = 750,
         conf_thr: float = 0.001,
         use_qkv: bool = True,
+        spatial_sigma: float = 0.2,
     ):
         super().__init__()
         self.cls_channels = cls_channels
@@ -37,6 +38,7 @@ class FeatureAggregationModule(nn.Module):
         self.topk = topk
         self.conf_thr = conf_thr
         self.use_qkv = use_qkv
+        self.spatial_sigma = spatial_sigma
 
         # Residual gate. Init to 0 so first forward = identity (cold-start safe).
         self.alpha = nn.Parameter(torch.tensor(0.0))
@@ -95,6 +97,9 @@ class FeatureAggregationModule(nn.Module):
         ref_offsets = torch.arange(R, device=ref_score.device).view(1, R, 1) * HW
         topk_idx = (topk_spatial_idx + ref_offsets).reshape(B, R * per_ref_k)
         topk_vals = topk_vals.reshape(B, R * per_ref_k)
+        ref_y = (topk_spatial_idx // W).to(dtype=key_feat.dtype) / max(H - 1, 1)
+        ref_x = (topk_spatial_idx % W).to(dtype=key_feat.dtype) / max(W - 1, 1)
+        ref_yx = torch.stack((ref_y, ref_x), dim=-1).reshape(B, R * per_ref_k, 2)
 
         # mask out tokens below conf_thr (keep the slot but zero its weight later)
         valid_mask = topk_vals > self.conf_thr                   # (B, K)
@@ -120,6 +125,21 @@ class FeatureAggregationModule(nn.Module):
         k_n = F.normalize(k, dim=-1)
         aff = torch.bmm(q_n, k_n.transpose(1, 2))                # (B, HW, K)
 
+        # Adjacent-frame VID motion is usually local. A soft spatial prior keeps
+        # small targets from borrowing features from far-away lookalikes while
+        # still allowing attention to move within a neighborhood.
+        spatial_sigma = float(getattr(self, "spatial_sigma", 0.2) or 0.0)
+        if spatial_sigma > 0:
+            ys, xs = torch.meshgrid(
+                torch.linspace(0, 1, H, device=key_feat.device, dtype=key_feat.dtype),
+                torch.linspace(0, 1, W, device=key_feat.device, dtype=key_feat.dtype),
+                indexing="ij",
+            )
+            key_yx = torch.stack((ys.reshape(-1), xs.reshape(-1)), dim=-1)  # (HW, 2)
+            dist2 = (key_yx.view(1, HW, 1, 2) - ref_yx.view(B, 1, -1, 2)).pow(2).sum(dim=-1)
+            sigma2 = max(spatial_sigma ** 2, 1e-6)
+            aff = aff - dist2 / (2.0 * sigma2)
+
         # mask invalid ref tokens by setting their logit to -inf. Rows with no
         # valid refs are temporarily filled with zeros and restored to key below.
         if not valid_mask.all():
@@ -144,7 +164,8 @@ class FeatureAggregationModule(nn.Module):
     def extra_repr(self) -> str:
         return (
             f"C={self.cls_channels}, R={self.num_ref_frames}, "
-            f"topk={self.topk}, conf_thr={self.conf_thr}, qkv={self.use_qkv}"
+            f"topk={self.topk}, conf_thr={self.conf_thr}, "
+            f"spatial_sigma={getattr(self, 'spatial_sigma', 0.2)}, qkv={self.use_qkv}"
         )
 
 

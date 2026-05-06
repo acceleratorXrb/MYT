@@ -241,8 +241,14 @@ def build_fam_warmup_callback(opt):
     return on_train_epoch_start
 
 
-def set_detect_vid_temporal_fusion(model, mode):
-    """Set Detect_VID temporal fusion mode on a YOLO wrapper or raw model."""
+def set_detect_vid_temporal_fusion(
+    model,
+    mode,
+    fam_conf_boost=None,
+    temporal_cls_consistency=None,
+    fam_spatial_sigma=None,
+):
+    """Set Detect_VID temporal fusion options on a YOLO wrapper or raw model."""
     try:
         from ultralytics.nn.modules import Detect_VID
     except Exception:
@@ -258,6 +264,13 @@ def set_detect_vid_temporal_fusion(model, mode):
         for module in root.modules():
             if isinstance(module, Detect_VID):
                 module.temporal_fusion = mode
+                if fam_conf_boost is not None:
+                    module.fam_conf_boost = float(fam_conf_boost)
+                if temporal_cls_consistency is not None:
+                    module.temporal_cls_consistency = float(temporal_cls_consistency)
+                if fam_spatial_sigma is not None:
+                    for fam in getattr(module, "fams", []):
+                        fam.spatial_sigma = float(fam_spatial_sigma)
                 count += 1
     return count
 
@@ -378,6 +391,9 @@ def parse_opt():
     parser.add_argument('--ref_sample', default='adjacent', choices=['adjacent', 'causal', 'uniform_local', 'uniform_global'], help='ref-frame sampling strategy')
     parser.add_argument('--ref_aux_loss', type=float, default=0.0, help='auxiliary detection loss weight for reference frames')
     parser.add_argument('--temporal_fusion', default='fam', choices=['fam', 'logits', 'logits_gated', 'none'], help='Detect_VID temporal fusion mode')
+    parser.add_argument('--fam_conf_boost', type=float, default=0.0, help='positive-only ref confidence boost gain for FAM mode')
+    parser.add_argument('--fam_spatial_sigma', type=float, default=0.2, help='normalized spatial sigma for local FAM attention; 0 disables')
+    parser.add_argument('--temporal_cls_consistency', type=float, default=0.0, help='optional clip class-consistency loss gain')
     parser.add_argument('--fam_warmup_epochs', type=float, default=0.0, help='linearly warm FAM alpha for this many epochs; 0 disables')
     parser.add_argument('--fam_alpha_target', type=float, default=1.0, help='target FAM alpha value at the end of warmup')
     parser.add_argument('--debug_clip_shape', action='store_true', help='print the first training batch image shape and clip layout')
@@ -422,6 +438,9 @@ if __name__ == '__main__':
         "ref_sample": opt.ref_sample,
         "ref_aux_loss": opt.ref_aux_loss,
         "temporal_fusion": opt.temporal_fusion,
+        "fam_conf_boost": opt.fam_conf_boost,
+        "fam_spatial_sigma": opt.fam_spatial_sigma,
+        "temporal_cls_consistency": opt.temporal_cls_consistency,
         "fam_warmup_epochs": opt.fam_warmup_epochs,
         "fam_alpha_target": opt.fam_alpha_target,
         "debug_clip_shape": opt.debug_clip_shape,
@@ -446,13 +465,25 @@ if __name__ == '__main__':
             args[k] = True
     model_path = resolve_path(opt.weights) if opt.weights else resolve_path(opt.config)
     model = YOLO(model_path)
-    set_detect_vid_temporal_fusion(model, opt.temporal_fusion)
+    set_detect_vid_temporal_fusion(
+        model,
+        opt.temporal_fusion,
+        opt.fam_conf_boost,
+        opt.temporal_cls_consistency,
+        opt.fam_spatial_sigma,
+    )
     if task == "train":
         if opt.init_weights:
             init_weights = resolve_path(opt.init_weights)
             print(f"[init-weights] loading partial weights from {init_weights}", flush=True)
             model.load(init_weights)
-            set_detect_vid_temporal_fusion(model, opt.temporal_fusion)
+            set_detect_vid_temporal_fusion(
+                model,
+                opt.temporal_fusion,
+                opt.fam_conf_boost,
+                opt.temporal_cls_consistency,
+                opt.fam_spatial_sigma,
+            )
         if opt.fam_warmup_epochs > 0:
             model.add_callback("on_train_epoch_start", build_fam_warmup_callback(opt))
         if opt.extra_eval_period > 0:

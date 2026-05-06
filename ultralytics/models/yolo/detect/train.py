@@ -85,6 +85,11 @@ class DetectionTrainer(BaseTrainer):
                 cl = batch["clip_layout"].view(-1)
                 head.clip_layout = (int(cl[0].item()), int(cl[1].item()))
                 head.temporal_fusion = getattr(self.args, "temporal_fusion", "fam")
+                head.fam_conf_boost = float(getattr(self.args, "fam_conf_boost", 0.0) or 0.0)
+                head.temporal_cls_consistency = float(getattr(self.args, "temporal_cls_consistency", 0.0) or 0.0)
+                spatial_sigma = float(getattr(self.args, "fam_spatial_sigma", 0.2) or 0.0)
+                for fam in getattr(head, "fams", []):
+                    fam.spatial_sigma = spatial_sigma
         if getattr(self.args, "debug_clip_shape", False) and not getattr(self, "_debug_clip_shape_printed", False):
             clip_layout = batch.get("clip_layout")
             if hasattr(clip_layout, "detach"):
@@ -129,11 +134,13 @@ class DetectionTrainer(BaseTrainer):
         from ultralytics.nn.modules import Detect_VID
 
         head = de_parallel(self.model).model[-1]
-        self.loss_names = (
-            ("box_loss", "cls_loss", "dfl_loss", "ref_box_loss", "ref_cls_loss", "ref_dfl_loss")
-            if isinstance(head, Detect_VID) and float(getattr(self.args, "ref_aux_loss", 0.0) or 0.0) > 0.0
-            else ("box_loss", "cls_loss", "dfl_loss")
-        )
+        loss_names = ["box_loss", "cls_loss", "dfl_loss"]
+        if isinstance(head, Detect_VID):
+            if float(getattr(self.args, "ref_aux_loss", 0.0) or 0.0) > 0.0:
+                loss_names.extend(["ref_box_loss", "ref_cls_loss", "ref_dfl_loss"])
+            if float(getattr(self.args, "temporal_cls_consistency", 0.0) or 0.0) > 0.0:
+                loss_names.append("temporal_cls_loss")
+        self.loss_names = tuple(loss_names)
         return yolo.detect.DetectionValidator(
             self.test_loader, save_dir=self.save_dir, args=copy(self.args), _callbacks=self.callbacks
         )

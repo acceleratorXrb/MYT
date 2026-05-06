@@ -264,24 +264,45 @@ class v8VIDDetectionLoss(v8DetectionLoss):
     def __call__(self, preds, batch):
         total_loss, loss_items = super().__call__(preds, batch)
         aux_gain = float(getattr(self.hyp, "ref_aux_loss", 0.0) or 0.0)
-        if aux_gain <= 0.0:
-            return total_loss, loss_items
-        zeros = loss_items.new_zeros(3)
-
         head = self.model.model[-1]
-        aux_preds = getattr(head, "aux_outputs", None)
-        if not aux_preds or "ref_cls" not in batch or "ref_bboxes" not in batch or "ref_batch_idx" not in batch:
-            return total_loss, torch.cat((loss_items, zeros))
-        if batch["ref_cls"].numel() == 0:
-            return total_loss, torch.cat((loss_items, zeros))
+        extra_items = []
 
-        aux_batch = {
-            "batch_idx": batch["ref_batch_idx"],
-            "cls": batch["ref_cls"],
-            "bboxes": batch["ref_bboxes"],
-        }
-        aux_total, aux_items = super().__call__(aux_preds, aux_batch)
-        return total_loss + aux_gain * aux_total, torch.cat((loss_items, aux_gain * aux_items))
+        if aux_gain > 0.0:
+            zeros = loss_items.new_zeros(3)
+            aux_preds = getattr(head, "aux_outputs", None)
+            if (
+                aux_preds
+                and "ref_cls" in batch
+                and "ref_bboxes" in batch
+                and "ref_batch_idx" in batch
+                and batch["ref_cls"].numel() > 0
+            ):
+                aux_batch = {
+                    "batch_idx": batch["ref_batch_idx"],
+                    "cls": batch["ref_cls"],
+                    "bboxes": batch["ref_bboxes"],
+                }
+                aux_total, aux_items = super().__call__(aux_preds, aux_batch)
+                total_loss = total_loss + aux_gain * aux_total
+                extra_items.append(aux_gain * aux_items)
+            else:
+                extra_items.append(zeros)
+
+        cons_gain = float(getattr(self.hyp, "temporal_cls_consistency", 0.0) or 0.0)
+        if cons_gain > 0.0:
+            cons_losses = getattr(head, "temporal_consistency_losses", None)
+            if cons_losses:
+                cons_loss = torch.stack([x for x in cons_losses if x.ndim == 0]).mean()
+                feats = preds[1] if isinstance(preds, tuple) else preds
+                batch_size = feats[0].shape[0]
+                total_loss = total_loss + cons_gain * cons_loss * batch_size
+                extra_items.append((cons_gain * cons_loss.detach()).view(1))
+            else:
+                extra_items.append(loss_items.new_zeros(1))
+
+        if extra_items:
+            return total_loss, torch.cat((loss_items, *extra_items))
+        return total_loss, loss_items
 
 
 class v8SegmentationLoss(v8DetectionLoss):
