@@ -241,6 +241,27 @@ def build_fam_warmup_callback(opt):
     return on_train_epoch_start
 
 
+def set_detect_vid_temporal_fusion(model, mode):
+    """Set Detect_VID temporal fusion mode on a YOLO wrapper or raw model."""
+    try:
+        from ultralytics.nn.modules import Detect_VID
+    except Exception:
+        return 0
+    roots = [getattr(model, "model", model)]
+    predictor = getattr(model, "predictor", None)
+    if predictor is not None:
+        roots.append(getattr(predictor, "model", None))
+    count = 0
+    for root in roots:
+        if root is None or not hasattr(root, "modules"):
+            continue
+        for module in root.modules():
+            if isinstance(module, Detect_VID):
+                module.temporal_fusion = mode
+                count += 1
+    return count
+
+
 def resolve_dataset_yaml(path, project, data_task="auto"):
     """Materialize project-local dataset roots as absolute paths for Ultralytics."""
     data_path = Path(resolve_path(path))
@@ -356,6 +377,7 @@ def parse_opt():
     parser.add_argument('--clip_stride', type=int, default=1, help='temporal stride between sampled refs')
     parser.add_argument('--ref_sample', default='adjacent', choices=['adjacent', 'causal', 'uniform_local', 'uniform_global'], help='ref-frame sampling strategy')
     parser.add_argument('--ref_aux_loss', type=float, default=0.0, help='auxiliary detection loss weight for reference frames')
+    parser.add_argument('--temporal_fusion', default='fam', choices=['fam', 'logits', 'none'], help='Detect_VID temporal fusion mode')
     parser.add_argument('--fam_warmup_epochs', type=float, default=0.0, help='linearly warm FAM alpha for this many epochs; 0 disables')
     parser.add_argument('--fam_alpha_target', type=float, default=1.0, help='target FAM alpha value at the end of warmup')
     parser.add_argument('--debug_clip_shape', action='store_true', help='print the first training batch image shape and clip layout')
@@ -399,6 +421,7 @@ if __name__ == '__main__':
         "clip_stride": opt.clip_stride,
         "ref_sample": opt.ref_sample,
         "ref_aux_loss": opt.ref_aux_loss,
+        "temporal_fusion": opt.temporal_fusion,
         "fam_warmup_epochs": opt.fam_warmup_epochs,
         "fam_alpha_target": opt.fam_alpha_target,
         "debug_clip_shape": opt.debug_clip_shape,
@@ -423,11 +446,13 @@ if __name__ == '__main__':
             args[k] = True
     model_path = resolve_path(opt.weights) if opt.weights else resolve_path(opt.config)
     model = YOLO(model_path)
+    set_detect_vid_temporal_fusion(model, opt.temporal_fusion)
     if task == "train":
         if opt.init_weights:
             init_weights = resolve_path(opt.init_weights)
             print(f"[init-weights] loading partial weights from {init_weights}", flush=True)
             model.load(init_weights)
+            set_detect_vid_temporal_fusion(model, opt.temporal_fusion)
         if opt.fam_warmup_epochs > 0:
             model.add_callback("on_train_epoch_start", build_fam_warmup_callback(opt))
         if opt.extra_eval_period > 0:

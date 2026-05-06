@@ -121,6 +121,7 @@ class Detect_VID(Detect):
             for _ in ch
         )
         self.num_ref_frames = num_ref_frames
+        self.temporal_fusion = "fam"  # fam | logits | none
         self.clip_layout: tuple[int, int] | None = None  # (B, T); set by trainer
         self.aux_outputs: list[torch.Tensor] | None = None  # ref-frame predictions for auxiliary loss
         # streaming inference buffer (per detection level)
@@ -139,6 +140,19 @@ class Detect_VID(Detect):
     def _cv3_cls(self, i: int, pre: torch.Tensor) -> torch.Tensor:
         """Run the final 1x1 projection of cv3[i]."""
         return self.cv3[i][2](pre)
+
+    def _fusion_mode(self) -> str:
+        mode = str(getattr(self, "temporal_fusion", "fam") or "fam").lower()
+        if mode not in {"fam", "logits", "none"}:
+            raise ValueError(f"temporal_fusion must be fam|logits|none, got {mode!r}")
+        return mode
+
+    def _logits_fuse(self, i: int, key_logits: torch.Tensor, ref_logits: torch.Tensor) -> torch.Tensor:
+        """Direct temporal cls-logit fusion for a simple FAM ablation."""
+        if ref_logits.numel() == 0 or ref_logits.shape[1] == 0:
+            return key_logits
+        alpha = self.fams[i].alpha.to(device=key_logits.device, dtype=key_logits.dtype)
+        return key_logits + alpha * ref_logits.mean(dim=1)
 
     def _aggregate_clip(
         self, i: int, x_i: torch.Tensor, B: int, T: int, return_aux: bool = False
@@ -162,8 +176,14 @@ class Detect_VID(Detect):
         ref_pre = pre_clip[:, 1:]                                   # (B, T-1, c3, H, W)
         ref_logits = cls_clip[:, 1:]                                # (B, T-1, nc, H, W)
 
-        agg_pre = self.fams[i](key_pre, ref_pre, ref_logits)        # (B, c3, H, W)
-        cls_out = self._cv3_cls(i, agg_pre)                         # (B, nc, H, W)
+        mode = self._fusion_mode()
+        if mode == "fam":
+            agg_pre = self.fams[i](key_pre, ref_pre, ref_logits)    # (B, c3, H, W)
+            cls_out = self._cv3_cls(i, agg_pre)                     # (B, nc, H, W)
+        elif mode == "logits":
+            cls_out = self._logits_fuse(i, cls_clip[:, 0], ref_logits)
+        else:
+            cls_out = cls_clip[:, 0]
 
         Cr = reg_full.shape[1]
         reg_clip = reg_full.view(B, T, Cr, H, W)
@@ -204,8 +224,14 @@ class Detect_VID(Detect):
         B, R, Cp, H, W = ref_pre.shape
         ref_logits = self._cv3_cls(i, ref_pre.view(B * R, Cp, H, W)).view(B, R, self.nc, H, W)
 
-        agg_pre = self.fams[i](pre_full, ref_pre, ref_logits)
-        cls_out = self._cv3_cls(i, agg_pre)
+        mode = self._fusion_mode()
+        if mode == "fam":
+            agg_pre = self.fams[i](pre_full, ref_pre, ref_logits)
+            cls_out = self._cv3_cls(i, agg_pre)
+        elif mode == "logits":
+            cls_out = self._logits_fuse(i, self._cv3_cls(i, pre_full), ref_logits)
+        else:
+            cls_out = self._cv3_cls(i, pre_full)
 
         # push current pre into buffer (capped)
         buf.append(pre_full.detach())

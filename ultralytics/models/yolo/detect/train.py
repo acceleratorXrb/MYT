@@ -84,6 +84,7 @@ class DetectionTrainer(BaseTrainer):
             if isinstance(head, Detect_VID):
                 cl = batch["clip_layout"].view(-1)
                 head.clip_layout = (int(cl[0].item()), int(cl[1].item()))
+                head.temporal_fusion = getattr(self.args, "temporal_fusion", "fam")
         if getattr(self.args, "debug_clip_shape", False) and not getattr(self, "_debug_clip_shape_printed", False):
             clip_layout = batch.get("clip_layout")
             if hasattr(clip_layout, "detach"):
