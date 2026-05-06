@@ -377,7 +377,7 @@ def parse_opt():
     parser.add_argument('--clip_stride', type=int, default=1, help='temporal stride between sampled refs')
     parser.add_argument('--ref_sample', default='adjacent', choices=['adjacent', 'causal', 'uniform_local', 'uniform_global'], help='ref-frame sampling strategy')
     parser.add_argument('--ref_aux_loss', type=float, default=0.0, help='auxiliary detection loss weight for reference frames')
-    parser.add_argument('--temporal_fusion', default='fam', choices=['fam', 'logits', 'none'], help='Detect_VID temporal fusion mode')
+    parser.add_argument('--temporal_fusion', default='fam', choices=['fam', 'logits', 'logits_gated', 'none'], help='Detect_VID temporal fusion mode')
     parser.add_argument('--fam_warmup_epochs', type=float, default=0.0, help='linearly warm FAM alpha for this many epochs; 0 disables')
     parser.add_argument('--fam_alpha_target', type=float, default=1.0, help='target FAM alpha value at the end of warmup')
     parser.add_argument('--debug_clip_shape', action='store_true', help='print the first training batch image shape and clip layout')

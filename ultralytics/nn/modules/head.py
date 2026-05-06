@@ -121,7 +121,7 @@ class Detect_VID(Detect):
             for _ in ch
         )
         self.num_ref_frames = num_ref_frames
-        self.temporal_fusion = "fam"  # fam | logits | none
+        self.temporal_fusion = "fam"  # fam | logits | logits_gated | none
         self.clip_layout: tuple[int, int] | None = None  # (B, T); set by trainer
         self.aux_outputs: list[torch.Tensor] | None = None  # ref-frame predictions for auxiliary loss
         # streaming inference buffer (per detection level)
@@ -143,16 +143,25 @@ class Detect_VID(Detect):
 
     def _fusion_mode(self) -> str:
         mode = str(getattr(self, "temporal_fusion", "fam") or "fam").lower()
-        if mode not in {"fam", "logits", "none"}:
-            raise ValueError(f"temporal_fusion must be fam|logits|none, got {mode!r}")
+        if mode not in {"fam", "logits", "logits_gated", "none"}:
+            raise ValueError(f"temporal_fusion must be fam|logits|logits_gated|none, got {mode!r}")
         return mode
 
-    def _logits_fuse(self, i: int, key_logits: torch.Tensor, ref_logits: torch.Tensor) -> torch.Tensor:
+    def _logits_fuse(
+        self, i: int, key_logits: torch.Tensor, ref_logits: torch.Tensor, gated: bool = False
+    ) -> torch.Tensor:
         """Direct temporal cls-logit fusion for a simple FAM ablation."""
         if ref_logits.numel() == 0 or ref_logits.shape[1] == 0:
             return key_logits
         alpha = self.fams[i].alpha.to(device=key_logits.device, dtype=key_logits.dtype)
-        return key_logits + alpha * ref_logits.mean(dim=1)
+        if not gated:
+            return key_logits + alpha * ref_logits.mean(dim=1)
+
+        ref_conf = ref_logits.sigmoid().amax(dim=2, keepdim=True)  # (B, R, 1, H, W)
+        ref_weight = ref_conf / ref_conf.sum(dim=1, keepdim=True).clamp_min(1e-6)
+        ref_mean = (ref_logits * ref_weight).sum(dim=1)
+        center_gate = 1.0 - key_logits.sigmoid().amax(dim=1, keepdim=True)
+        return key_logits + alpha * center_gate * ref_mean
 
     def _aggregate_clip(
         self, i: int, x_i: torch.Tensor, B: int, T: int, return_aux: bool = False
@@ -182,6 +191,8 @@ class Detect_VID(Detect):
             cls_out = self._cv3_cls(i, agg_pre)                     # (B, nc, H, W)
         elif mode == "logits":
             cls_out = self._logits_fuse(i, cls_clip[:, 0], ref_logits)
+        elif mode == "logits_gated":
+            cls_out = self._logits_fuse(i, cls_clip[:, 0], ref_logits, gated=True)
         else:
             cls_out = cls_clip[:, 0]
 
@@ -230,6 +241,8 @@ class Detect_VID(Detect):
             cls_out = self._cv3_cls(i, agg_pre)
         elif mode == "logits":
             cls_out = self._logits_fuse(i, self._cv3_cls(i, pre_full), ref_logits)
+        elif mode == "logits_gated":
+            cls_out = self._logits_fuse(i, self._cv3_cls(i, pre_full), ref_logits, gated=True)
         else:
             cls_out = self._cv3_cls(i, pre_full)
 
