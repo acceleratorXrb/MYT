@@ -110,6 +110,7 @@ def build_yolo_dataset(cfg, img_path, batch, data, mode="train", rect=False, str
             clip_stride=getattr(cfg, "clip_stride", 1),
             ref_sample=getattr(cfg, "ref_sample", "adjacent"),
             debug_clip_aug=getattr(cfg, "debug_clip_aug", False),
+            debug_clip_refs=getattr(cfg, "debug_clip_refs", False),
         )
     dataset = YOLOMultiModalDataset if multi_modal else YOLODataset
     return dataset(

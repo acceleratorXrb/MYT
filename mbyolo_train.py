@@ -360,6 +360,7 @@ def parse_opt():
     parser.add_argument('--fam_alpha_target', type=float, default=1.0, help='target FAM alpha value at the end of warmup')
     parser.add_argument('--debug_clip_shape', action='store_true', help='print the first training batch image shape and clip layout')
     parser.add_argument('--debug_clip_aug', action='store_true', help='print first few VID clip augmentation decisions')
+    parser.add_argument('--debug_clip_refs', action='store_true', help='print first few VID key/ref frame paths and positions')
     # Optional heavier video metrics, run after checkpoint save every N epochs.
     parser.add_argument('--extra_eval_period', type=int, default=1, help='run flicker/MOT video eval every N epochs; 0 disables')
     parser.add_argument('--extra_eval_official_root', default='datasets/VisDrone-VID/raw/VisDrone2019-VID-val', help='official VisDrone-VID split root with annotations/ and sequences/')
@@ -402,6 +403,7 @@ if __name__ == '__main__':
         "fam_alpha_target": opt.fam_alpha_target,
         "debug_clip_shape": opt.debug_clip_shape,
         "debug_clip_aug": opt.debug_clip_aug,
+        "debug_clip_refs": opt.debug_clip_refs,
     }
     passthrough = (
         "lr0", "lrf", "momentum", "weight_decay", "warmup_epochs", "warmup_momentum", "warmup_bias_lr",

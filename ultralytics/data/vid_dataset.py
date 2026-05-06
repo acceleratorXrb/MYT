@@ -50,6 +50,7 @@ class VIDClipDataset(YOLODataset):
         ref_sample: str = "adjacent",
         seq_key: str = "parent",
         debug_clip_aug: bool = False,
+        debug_clip_refs: bool = False,
         **kwargs,
     ):
         self._vid_num_ref = max(0, int(num_ref_frames))
@@ -58,6 +59,8 @@ class VIDClipDataset(YOLODataset):
         self._vid_mixup = 0.0
         self._debug_clip_aug = bool(debug_clip_aug)
         self._debug_clip_aug_printed = 0
+        self._debug_clip_refs = bool(debug_clip_refs)
+        self._debug_clip_refs_printed = 0
         if ref_sample not in {"adjacent", "causal", "uniform_local", "uniform_global"}:
             raise ValueError(f"ref_sample must be adjacent|causal|uniform_local|uniform_global, got {ref_sample}")
         self._vid_ref_sample = ref_sample
@@ -197,6 +200,7 @@ class VIDClipDataset(YOLODataset):
             return key_sample
 
         ref_idxs = self._sample_refs(idx)
+        self._debug_print_clip_refs(idx, ref_idxs)
         ref_imgs = []
         ref_cls = []
         ref_bboxes = []
@@ -223,6 +227,26 @@ class VIDClipDataset(YOLODataset):
             torch.cat(ref_batch_idx, 0) if ref_batch_idx else torch.zeros((0,), dtype=key_sample["batch_idx"].dtype)
         )
         return key_sample
+
+    def _debug_print_clip_refs(self, idx: int, ref_idxs: list[int]):
+        if not self._debug_clip_refs or self._debug_clip_refs_printed >= 5:
+            return
+        if idx in self.idx2seqpos:
+            seq_name, key_pos = self.idx2seqpos[idx]
+            seq_idxs = self.seqs[seq_name]
+            ref_pos = [seq_idxs.index(r) if r in seq_idxs else None for r in ref_idxs]
+        else:
+            seq_name, key_pos, ref_pos = None, None, []
+        key_path = self.im_files[idx]
+        ref_paths = [self.im_files[r] for r in ref_idxs]
+        print(
+            "[debug-clip-refs] "
+            f"idx={idx} seq={seq_name} key_pos={key_pos} ref_pos={ref_pos} "
+            f"num_ref_frames={self._vid_num_ref} clip_stride={self._vid_stride} ref_sample={self._vid_ref_sample} "
+            f"key={key_path} refs={ref_paths}",
+            flush=True,
+        )
+        self._debug_clip_refs_printed += 1
 
     @staticmethod
     def _shift_scale_boxes(bboxes: torch.Tensor, x0: int, y0: int, tile_w: int, tile_h: int, out_w: int, out_h: int):
