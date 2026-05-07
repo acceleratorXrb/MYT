@@ -97,6 +97,17 @@ class DetectionTrainer(BaseTrainer):
                 spatial_sigma = float(getattr(self.args, "fam_spatial_sigma", 0.2) or 0.0)
                 for fam in getattr(head, "fams", []):
                     fam.spatial_sigma = spatial_sigma
+                proposal_topk = int(getattr(self.args, "proposal_topk", 150) or 150)
+                proposal_sigma = float(getattr(self.args, "proposal_spatial_sigma", 0.05) or 0.0)
+                proposal_cls_gain = float(getattr(self.args, "proposal_cls_sim_gain", 0.5) or 0.0)
+                proposal_reg_gain = float(getattr(self.args, "proposal_reg_sim_gain", 0.25) or 0.0)
+                proposal_score_gain = float(getattr(self.args, "proposal_score_gain", 0.25) or 0.0)
+                for refiner in getattr(head, "proposal_refiners", []):
+                    refiner.topk = proposal_topk
+                    refiner.spatial_sigma = proposal_sigma
+                    refiner.cls_sim_gain = proposal_cls_gain
+                    refiner.reg_sim_gain = proposal_reg_gain
+                    refiner.score_gain = proposal_score_gain
         if getattr(self.args, "debug_clip_shape", False) and not getattr(self, "_debug_clip_shape_printed", False):
             clip_layout = batch.get("clip_layout")
             if hasattr(clip_layout, "detach"):

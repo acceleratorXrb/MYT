@@ -14,7 +14,7 @@ from .block import DFL, BNContrastiveHead, ContrastiveHead, Proto
 from .conv import Conv
 from .transformer import MLP, DeformableTransformerDecoder, DeformableTransformerDecoderLayer
 from .utils import bias_init_with_prob, linear_init
-from .yolov_fam import FeatureAggregationModule
+from .yolov_fam import FeatureAggregationModule, ProposalTemporalRefiner
 
 __all__ = "Detect", "Detect_VID", "Segment", "Pose", "Classify", "OBB", "RTDETRDecoder"
 
@@ -120,8 +120,17 @@ class Detect_VID(Detect):
             )
             for _ in ch
         )
+        self.proposal_refiners = nn.ModuleList(
+            ProposalTemporalRefiner(
+                cls_channels=c3,
+                nc=nc,
+                topk=min(int(topk), 150),
+                conf_thr=conf_thr,
+            )
+            for _ in ch
+        )
         self.num_ref_frames = num_ref_frames
-        self.temporal_fusion = "fam"  # fam | logits | logits_gated | none
+        self.temporal_fusion = "fam"  # fam | proposal | fam_proposal | logits | logits_gated | none
         self.fam_conf_boost = 0.0
         self.temporal_cls_consistency = 0.0
         self.debug_vid_head = False
@@ -149,8 +158,10 @@ class Detect_VID(Detect):
 
     def _fusion_mode(self) -> str:
         mode = str(getattr(self, "temporal_fusion", "fam") or "fam").lower()
-        if mode not in {"fam", "logits", "logits_gated", "none"}:
-            raise ValueError(f"temporal_fusion must be fam|logits|logits_gated|none, got {mode!r}")
+        if mode not in {"fam", "proposal", "fam_proposal", "logits", "logits_gated", "none"}:
+            raise ValueError(
+                f"temporal_fusion must be fam|proposal|fam_proposal|logits|logits_gated|none, got {mode!r}"
+            )
         return mode
 
     def _logits_fuse(
@@ -225,12 +236,18 @@ class Detect_VID(Detect):
         key_logits: torch.Tensor,
         ref_pre: torch.Tensor,
         ref_logits: torch.Tensor,
+        key_reg: torch.Tensor | None = None,
+        ref_reg: torch.Tensor | None = None,
     ) -> torch.Tensor:
         mode = self._fusion_mode()
-        if mode == "fam":
+        if mode in {"fam", "fam_proposal"}:
             agg_pre = self.fams[i](key_pre, ref_pre, ref_logits)
             cls_out = self._cv3_cls(i, agg_pre)
             cls_out = self._ref_conf_boost(i, cls_out, ref_logits)
+            if mode == "fam_proposal":
+                cls_out = self.proposal_refiners[i](agg_pre, cls_out, ref_pre, ref_logits, key_reg, ref_reg)
+        elif mode == "proposal":
+            cls_out = self.proposal_refiners[i](key_pre, key_logits, ref_pre, ref_logits, key_reg, ref_reg)
         elif mode == "logits":
             cls_out = self._logits_fuse(i, key_logits, ref_logits)
         elif mode == "logits_gated":
@@ -258,6 +275,8 @@ class Detect_VID(Detect):
         pre_clip = pre_full.view(B, T, Cp, H, W)
         cls_full = self._cv3_cls(i, pre_full)                       # (B*T, nc, H, W)
         cls_clip = cls_full.view(B, T, self.nc, H, W)
+        Cr = reg_full.shape[1]
+        reg_clip = reg_full.view(B, T, Cr, H, W)
 
         if self.clip_all_keys:
             num_refs = min(int(getattr(self, "num_ref_frames", T - 1)), max(T - 1, 0))
@@ -274,6 +293,8 @@ class Detect_VID(Detect):
                         cls_clip[:, key_pos],
                         pre_clip[:, ref_idx],
                         cls_clip[:, ref_idx],
+                        reg_clip[:, key_pos],
+                        reg_clip[:, ref_idx],
                     )
                 else:
                     cls_out = cls_clip[:, key_pos]
@@ -284,7 +305,8 @@ class Detect_VID(Detect):
                 print(
                     "[debug-vid-head] "
                     f"mode=window level={i} B={B} T={T} clip_all_keys={self.clip_all_keys} "
-                    f"num_ref_frames={self.num_ref_frames} ref_debug={ref_debug} "
+                    f"num_ref_frames={self.num_ref_frames} fusion={self._fusion_mode()} "
+                    f"proposal_topk={getattr(self.proposal_refiners[i], 'topk', None)} ref_debug={ref_debug} "
                     f"pre_shape={tuple(pre_full.shape)} reg_shape={tuple(reg_full.shape)} "
                     f"out_shape={tuple(out.shape)} aux=None",
                     flush=True,
@@ -295,18 +317,18 @@ class Detect_VID(Detect):
         key_pre = pre_clip[:, 0]                                    # (B, c3, H, W)
         ref_pre = pre_clip[:, 1:]                                   # (B, T-1, c3, H, W)
         ref_logits = cls_clip[:, 1:]                                # (B, T-1, nc, H, W)
-
-        cls_out = self._aggregate_one_key(i, key_pre, cls_clip[:, 0], ref_pre, ref_logits)
-
-        Cr = reg_full.shape[1]
-        reg_clip = reg_full.view(B, T, Cr, H, W)
         reg_key = reg_clip[:, 0]                                    # (B, 4*reg_max, H, W)
+        ref_reg = reg_clip[:, 1:]                                   # (B, T-1, 4*reg_max, H, W)
+
+        cls_out = self._aggregate_one_key(i, key_pre, cls_clip[:, 0], ref_pre, ref_logits, reg_key, ref_reg)
+
         key_out = torch.cat((reg_key, cls_out), 1)
         if bool(getattr(self, "debug_vid_head", False)) and self._debug_vid_head_printed < 6:
             print(
                 "[debug-vid-head] "
                 f"mode=center level={i} B={B} T={T} clip_all_keys={self.clip_all_keys} "
-                f"num_ref_frames={self.num_ref_frames} ref_count={ref_pre.shape[1]} "
+                f"num_ref_frames={self.num_ref_frames} fusion={self._fusion_mode()} "
+                f"proposal_topk={getattr(self.proposal_refiners[i], 'topk', None)} ref_count={ref_pre.shape[1]} "
                 f"pre_shape={tuple(pre_full.shape)} reg_key_shape={tuple(reg_key.shape)} "
                 f"out_shape={tuple(key_out.shape)}",
                 flush=True,
@@ -348,10 +370,14 @@ class Detect_VID(Detect):
         ref_logits = self._cv3_cls(i, ref_pre.view(B * R, Cp, H, W)).view(B, R, self.nc, H, W)
 
         mode = self._fusion_mode()
-        if mode == "fam":
+        if mode in {"fam", "fam_proposal"}:
             agg_pre = self.fams[i](pre_full, ref_pre, ref_logits)
             cls_out = self._cv3_cls(i, agg_pre)
             cls_out = self._ref_conf_boost(i, cls_out, ref_logits)
+            if mode == "fam_proposal":
+                cls_out = self.proposal_refiners[i](agg_pre, cls_out, ref_pre, ref_logits, reg_full, None)
+        elif mode == "proposal":
+            cls_out = self.proposal_refiners[i](pre_full, self._cv3_cls(i, pre_full), ref_pre, ref_logits, reg_full, None)
         elif mode == "logits":
             cls_out = self._logits_fuse(i, self._cv3_cls(i, pre_full), ref_logits)
         elif mode == "logits_gated":

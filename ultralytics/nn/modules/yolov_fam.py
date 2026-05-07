@@ -169,6 +169,183 @@ class FeatureAggregationModule(nn.Module):
         )
 
 
+class ProposalTemporalRefiner(nn.Module):
+    """YOLOV-style sparse proposal refinement for VID classification logits.
+
+    Dense FAM updates every grid cell. This module is intentionally sparser:
+    it selects top-scoring key/ref locations, lets key proposals attend to
+    proposal tokens from adjacent frames, then scatters a small class-logit
+    correction back to those key locations. Boxes stay on the current frame.
+    """
+
+    def __init__(
+        self,
+        cls_channels: int,
+        nc: int,
+        topk: int = 150,
+        conf_thr: float = 0.001,
+        spatial_sigma: float = 0.05,
+        cls_sim_gain: float = 0.5,
+        reg_sim_gain: float = 0.25,
+        score_gain: float = 0.25,
+    ):
+        super().__init__()
+        self.cls_channels = cls_channels
+        self.nc = nc
+        self.topk = topk
+        self.conf_thr = conf_thr
+        self.spatial_sigma = spatial_sigma
+        self.cls_sim_gain = cls_sim_gain
+        self.reg_sim_gain = reg_sim_gain
+        self.score_gain = score_gain
+
+        self.alpha = nn.Parameter(torch.tensor(0.0))
+        self.q = nn.Linear(cls_channels, cls_channels, bias=False)
+        self.k = nn.Linear(cls_channels, cls_channels, bias=False)
+        self.v = nn.Linear(cls_channels, cls_channels, bias=False)
+        self.gate = nn.Linear(cls_channels * 2, 1)
+        self.norm = nn.LayerNorm(cls_channels)
+        self.out = nn.Linear(cls_channels, nc)
+
+        nn.init.zeros_(self.gate.bias)
+        nn.init.xavier_uniform_(self.out.weight, gain=0.01)
+        nn.init.zeros_(self.out.bias)
+
+    @staticmethod
+    def _gather_tokens(x: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
+        """Gather flattened spatial tokens from `(B, C, H, W)` using `(B, K)` indices."""
+        B, C, _, _ = x.shape
+        flat = x.flatten(2).transpose(1, 2)  # (B, HW, C)
+        return flat.gather(1, idx.unsqueeze(-1).expand(B, idx.shape[1], C))
+
+    @staticmethod
+    def _gather_logits(x: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
+        """Gather flattened spatial logits from `(B, C, H, W)` using `(B, K)` indices."""
+        B, C, _, _ = x.shape
+        flat = x.flatten(2).transpose(1, 2)  # (B, HW, C)
+        return flat.gather(1, idx.unsqueeze(-1).expand(B, idx.shape[1], C))
+
+    def _topk_positions(self, logits: torch.Tensor, k: int) -> tuple[torch.Tensor, torch.Tensor]:
+        score = logits.sigmoid().amax(dim=1).flatten(1)  # (B, HW)
+        k = max(1, min(int(k), score.shape[1]))
+        return score.topk(k, dim=1)
+
+    def forward(
+        self,
+        key_feat: torch.Tensor,
+        key_logits: torch.Tensor,
+        ref_feat: torch.Tensor,
+        ref_logits: torch.Tensor,
+        key_reg: torch.Tensor | None = None,
+        ref_reg: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        if ref_feat.numel() == 0 or ref_feat.shape[1] == 0:
+            return key_logits
+
+        B, C, H, W = key_feat.shape
+        R = ref_feat.shape[1]
+        if ref_feat.shape[-2:] != (H, W):
+            ref_feat = F.interpolate(
+                ref_feat.reshape(B * R, C, *ref_feat.shape[-2:]), size=(H, W), mode="bilinear", align_corners=False
+            ).view(B, R, C, H, W)
+            ref_logits = F.interpolate(
+                ref_logits.reshape(B * R, ref_logits.shape[2], *ref_logits.shape[-2:]),
+                size=(H, W),
+                mode="bilinear",
+                align_corners=False,
+            ).view(B, R, ref_logits.shape[2], H, W)
+            if ref_reg is not None:
+                ref_reg = F.interpolate(
+                    ref_reg.reshape(B * R, ref_reg.shape[2], *ref_reg.shape[-2:]),
+                    size=(H, W),
+                    mode="bilinear",
+                    align_corners=False,
+                ).view(B, R, ref_reg.shape[2], H, W)
+
+        topk = max(1, int(getattr(self, "topk", 150) or 1))
+        key_vals, key_idx = self._topk_positions(key_logits, topk)
+        per_ref_k = max(1, min(H * W, topk // max(R, 1)))
+        ref_score = ref_logits.sigmoid().amax(dim=2).reshape(B, R, H * W)
+        ref_vals, ref_spatial_idx = ref_score.topk(per_ref_k, dim=2)  # (B, R, K)
+        ref_offsets = torch.arange(R, device=ref_logits.device).view(1, R, 1) * (H * W)
+        ref_idx = (ref_spatial_idx + ref_offsets).reshape(B, R * per_ref_k)
+        ref_vals = ref_vals.reshape(B, R * per_ref_k)
+
+        valid_mask = ref_vals > float(getattr(self, "conf_thr", 0.001) or 0.0)
+        valid_any = valid_mask.any(dim=1)
+        if not valid_any.any():
+            return key_logits
+        safe_mask = valid_mask.clone()
+        safe_mask[~valid_any, 0] = True
+
+        key_tok = self._gather_tokens(key_feat, key_idx)  # (B, Kq, C)
+        ref_tok_full = ref_feat.permute(0, 1, 3, 4, 2).reshape(B, R * H * W, C)
+        ref_tok = ref_tok_full.gather(1, ref_idx.unsqueeze(-1).expand(B, ref_idx.shape[1], C))
+
+        q = F.normalize(self.q(key_tok), dim=-1)
+        k = F.normalize(self.k(ref_tok), dim=-1)
+        attn = torch.bmm(q, k.transpose(1, 2)) / max(C ** 0.5, 1.0)
+
+        key_prob = self._gather_logits(key_logits.sigmoid(), key_idx)
+        ref_prob_full = ref_logits.sigmoid().permute(0, 1, 3, 4, 2).reshape(B, R * H * W, self.nc)
+        ref_prob = ref_prob_full.gather(1, ref_idx.unsqueeze(-1).expand(B, ref_idx.shape[1], self.nc))
+        cls_gain = float(getattr(self, "cls_sim_gain", 0.5) or 0.0)
+        if cls_gain > 0:
+            cls_sim = torch.bmm(F.normalize(key_prob, dim=-1), F.normalize(ref_prob, dim=-1).transpose(1, 2))
+            attn = attn + cls_gain * cls_sim
+
+        reg_gain = float(getattr(self, "reg_sim_gain", 0.25) or 0.0)
+        if reg_gain > 0 and key_reg is not None and ref_reg is not None:
+            key_reg_tok = self._gather_tokens(key_reg, key_idx)
+            Cr = ref_reg.shape[2]
+            ref_reg_full = ref_reg.permute(0, 1, 3, 4, 2).reshape(B, R * H * W, Cr)
+            ref_reg_tok = ref_reg_full.gather(1, ref_idx.unsqueeze(-1).expand(B, ref_idx.shape[1], Cr))
+            reg_sim = torch.bmm(
+                F.normalize(key_reg_tok, dim=-1), F.normalize(ref_reg_tok, dim=-1).transpose(1, 2)
+            )
+            attn = attn + reg_gain * reg_sim
+
+        spatial_sigma = float(getattr(self, "spatial_sigma", 0.05) or 0.0)
+        if spatial_sigma > 0:
+            key_y = (key_idx // W).to(dtype=key_feat.dtype) / max(H - 1, 1)
+            key_x = (key_idx % W).to(dtype=key_feat.dtype) / max(W - 1, 1)
+            ref_spatial = ref_spatial_idx.reshape(B, R * per_ref_k)
+            ref_y = (ref_spatial // W).to(dtype=key_feat.dtype) / max(H - 1, 1)
+            ref_x = (ref_spatial % W).to(dtype=key_feat.dtype) / max(W - 1, 1)
+            dist2 = (key_y.unsqueeze(2) - ref_y.unsqueeze(1)).pow(2) + (
+                key_x.unsqueeze(2) - ref_x.unsqueeze(1)
+            ).pow(2)
+            attn = attn - dist2 / (2.0 * max(spatial_sigma ** 2, 1e-6))
+
+        score_gain = float(getattr(self, "score_gain", 0.25) or 0.0)
+        if score_gain > 0:
+            attn = attn + score_gain * torch.log(ref_vals.clamp_min(1e-6)).unsqueeze(1)
+
+        attn = attn.masked_fill(~safe_mask.unsqueeze(1), float("-inf"))
+        weights = attn.softmax(dim=-1)
+        agg = torch.bmm(weights, self.v(ref_tok))
+        gate = torch.sigmoid(self.gate(torch.cat((key_tok, agg), dim=-1)))
+        fused = key_tok + gate * (agg - key_tok)
+
+        delta = self.out(self.norm(fused)) * self.alpha.to(dtype=key_logits.dtype, device=key_logits.device)
+        # Strong key predictions need less help; uncertain proposals get more temporal correction.
+        center_uncertain = 1.0 - key_vals.unsqueeze(-1).clamp(0.0, 1.0)
+        delta = delta * center_uncertain
+        delta = torch.where(valid_any.view(B, 1, 1), delta, torch.zeros_like(delta))
+
+        out_flat = key_logits.flatten(2).clone()
+        scatter_idx = key_idx.unsqueeze(1).expand(B, self.nc, key_idx.shape[1])
+        out_flat.scatter_add_(2, scatter_idx, delta.transpose(1, 2))
+        return out_flat.view(B, self.nc, H, W)
+
+    def extra_repr(self) -> str:
+        return (
+            f"C={self.cls_channels}, nc={self.nc}, topk={self.topk}, conf_thr={self.conf_thr}, "
+            f"spatial_sigma={self.spatial_sigma}, cls_sim={self.cls_sim_gain}, "
+            f"reg_sim={self.reg_sim_gain}, score={self.score_gain}"
+        )
+
+
 def set_alpha_warmup(model: nn.Module, target: float) -> None:
     """Set FAM alpha residual gate to a fixed value across all FAMs in a model.
 
@@ -176,6 +353,6 @@ def set_alpha_warmup(model: nn.Module, target: float) -> None:
     few epochs.
     """
     for m in model.modules():
-        if isinstance(m, FeatureAggregationModule):
+        if isinstance(m, (FeatureAggregationModule, ProposalTemporalRefiner)):
             with torch.no_grad():
                 m.alpha.fill_(float(target))

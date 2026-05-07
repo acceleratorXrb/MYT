@@ -247,6 +247,11 @@ def set_detect_vid_temporal_fusion(
     fam_conf_boost=None,
     temporal_cls_consistency=None,
     fam_spatial_sigma=None,
+    proposal_topk=None,
+    proposal_spatial_sigma=None,
+    proposal_cls_sim_gain=None,
+    proposal_reg_sim_gain=None,
+    proposal_score_gain=None,
 ):
     """Set Detect_VID temporal fusion options on a YOLO wrapper or raw model."""
     try:
@@ -271,6 +276,17 @@ def set_detect_vid_temporal_fusion(
                 if fam_spatial_sigma is not None:
                     for fam in getattr(module, "fams", []):
                         fam.spatial_sigma = float(fam_spatial_sigma)
+                for refiner in getattr(module, "proposal_refiners", []):
+                    if proposal_topk is not None:
+                        refiner.topk = int(proposal_topk)
+                    if proposal_spatial_sigma is not None:
+                        refiner.spatial_sigma = float(proposal_spatial_sigma)
+                    if proposal_cls_sim_gain is not None:
+                        refiner.cls_sim_gain = float(proposal_cls_sim_gain)
+                    if proposal_reg_sim_gain is not None:
+                        refiner.reg_sim_gain = float(proposal_reg_sim_gain)
+                    if proposal_score_gain is not None:
+                        refiner.score_gain = float(proposal_score_gain)
                 count += 1
     return count
 
@@ -392,12 +408,17 @@ def parse_opt():
     parser.add_argument('--vid_clip_mode', default='center', choices=['center', 'window'], help='VID training clip layout: center repeats refs; window uses each frame once inside a temporal window')
     parser.add_argument('--vid_window_size', type=int, default=None, help='frames per window when --vid_clip_mode window; defaults to num_ref_frames+1')
     parser.add_argument('--ref_aux_loss', type=float, default=0.0, help='auxiliary detection loss weight for reference frames')
-    parser.add_argument('--temporal_fusion', default='fam', choices=['fam', 'logits', 'logits_gated', 'none'], help='Detect_VID temporal fusion mode')
+    parser.add_argument('--temporal_fusion', default='fam', choices=['fam', 'proposal', 'fam_proposal', 'logits', 'logits_gated', 'none'], help='Detect_VID temporal fusion mode')
     parser.add_argument('--fam_conf_boost', type=float, default=0.0, help='positive-only ref confidence boost gain for FAM mode')
     parser.add_argument('--fam_spatial_sigma', type=float, default=0.2, help='normalized spatial sigma for local FAM attention; 0 disables')
+    parser.add_argument('--proposal_topk', type=int, default=150, help='top-K key/ref locations per scale for YOLOV-style proposal temporal refinement')
+    parser.add_argument('--proposal_spatial_sigma', type=float, default=0.05, help='normalized spatial sigma for proposal temporal attention; 0 disables')
+    parser.add_argument('--proposal_cls_sim_gain', type=float, default=0.5, help='class-probability similarity gain in proposal temporal attention')
+    parser.add_argument('--proposal_reg_sim_gain', type=float, default=0.25, help='box-distribution similarity gain in proposal temporal attention')
+    parser.add_argument('--proposal_score_gain', type=float, default=0.25, help='reference confidence bias gain in proposal temporal attention')
     parser.add_argument('--temporal_cls_consistency', type=float, default=0.0, help='optional clip class-consistency loss gain')
-    parser.add_argument('--fam_warmup_epochs', type=float, default=0.0, help='linearly warm FAM alpha for this many epochs; 0 disables')
-    parser.add_argument('--fam_alpha_target', type=float, default=1.0, help='target FAM alpha value at the end of warmup')
+    parser.add_argument('--fam_warmup_epochs', type=float, default=0.0, help='linearly warm temporal fusion alpha for this many epochs; 0 disables')
+    parser.add_argument('--fam_alpha_target', type=float, default=1.0, help='target temporal fusion alpha value at the end of warmup')
     parser.add_argument('--debug_clip_shape', action='store_true', help='print the first training batch image shape and clip layout')
     parser.add_argument('--debug_clip_aug', action='store_true', help='print first few VID clip augmentation decisions')
     parser.add_argument('--debug_clip_refs', action='store_true', help='print first few VID key/ref frame paths and positions')
@@ -445,6 +466,11 @@ if __name__ == '__main__':
         "temporal_fusion": opt.temporal_fusion,
         "fam_conf_boost": opt.fam_conf_boost,
         "fam_spatial_sigma": opt.fam_spatial_sigma,
+        "proposal_topk": opt.proposal_topk,
+        "proposal_spatial_sigma": opt.proposal_spatial_sigma,
+        "proposal_cls_sim_gain": opt.proposal_cls_sim_gain,
+        "proposal_reg_sim_gain": opt.proposal_reg_sim_gain,
+        "proposal_score_gain": opt.proposal_score_gain,
         "temporal_cls_consistency": opt.temporal_cls_consistency,
         "fam_warmup_epochs": opt.fam_warmup_epochs,
         "fam_alpha_target": opt.fam_alpha_target,
@@ -477,6 +503,11 @@ if __name__ == '__main__':
         opt.fam_conf_boost,
         opt.temporal_cls_consistency,
         opt.fam_spatial_sigma,
+        opt.proposal_topk,
+        opt.proposal_spatial_sigma,
+        opt.proposal_cls_sim_gain,
+        opt.proposal_reg_sim_gain,
+        opt.proposal_score_gain,
     )
     if task == "train":
         if opt.init_weights:
@@ -489,6 +520,11 @@ if __name__ == '__main__':
                 opt.fam_conf_boost,
                 opt.temporal_cls_consistency,
                 opt.fam_spatial_sigma,
+                opt.proposal_topk,
+                opt.proposal_spatial_sigma,
+                opt.proposal_cls_sim_gain,
+                opt.proposal_reg_sim_gain,
+                opt.proposal_score_gain,
             )
         if opt.fam_warmup_epochs > 0:
             model.add_callback("on_train_epoch_start", build_fam_warmup_callback(opt))
