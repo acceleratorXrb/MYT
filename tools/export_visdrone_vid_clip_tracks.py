@@ -44,6 +44,8 @@ def parse_args():
     parser.add_argument("--num_ref_frames", type=int, default=4)
     parser.add_argument("--clip_stride", type=int, default=1)
     parser.add_argument("--ref_sample", default="adjacent", choices=["adjacent", "causal"])
+    parser.add_argument("--all_keys", action="store_true", help="Infer non-overlapping windows and track every frame once.")
+    parser.add_argument("--window_size", type=int, default=16, help="Frames per window when --all_keys is enabled.")
     return parser.parse_args()
 
 
@@ -119,32 +121,57 @@ def main():
         tracker = build_tracker(args.tracker)
         frames = image_files(seq_dir)
         lines = []
-        for key_pos, frame_path in enumerate(frames):
-            ref_pos = sample_ref_positions(
-                len(frames), key_pos, args.num_ref_frames, max(1, args.clip_stride), args.ref_sample
-            )
-            clip_paths = [frame_path] + [frames[p] for p in ref_pos]
-            tensor, key_img0 = load_clip(clip_paths, args.imgsz, stride)
-            tensor = tensor.to(device, non_blocking=True).float() / 255.0
-            set_clip_layout(yolo.model, (1, len(clip_paths)))
-            with torch.inference_mode():
-                pred = yolo.model(tensor)
-            det = ops.non_max_suppression(pred, args.conf, args.iou, max_det=args.max_det, in_place=False)[0]
-            if len(det):
-                ops.scale_boxes(tensor.shape[2:], det[:, :4], key_img0.shape)
+        if args.all_keys:
+            window_size = max(1, int(args.window_size or 1))
+            for start in range(0, len(frames), window_size):
+                window_frames = frames[start : start + window_size]
+                tensor, img0s = load_clip(window_frames, args.imgsz, stride, return_all=True)
+                tensor = tensor.to(device, non_blocking=True).float() / 255.0
+                set_clip_layout(yolo.model, (1, len(window_frames)), all_keys=True, num_ref_frames=args.num_ref_frames)
+                with torch.inference_mode():
+                    pred = yolo.model(tensor)
+                dets = ops.non_max_suppression(pred, args.conf, args.iou, max_det=args.max_det, in_place=False)
+                for local_pos, det in enumerate(dets):
+                    img0 = img0s[local_pos]
+                    if len(det):
+                        ops.scale_boxes(tensor.shape[2:], det[:, :4], img0.shape)
+                    tracks = tracker.update(det_namespace(det))
+                    height, width = img0.shape[:2]
+                    index = frame_index(window_frames[local_pos], start + local_pos + 1)
+                    if len(tracks):
+                        order = np.argsort(tracks[:, 5])[::-1]
+                        for row_index in order:
+                            row = tracks[row_index]
+                            lines.append(format_track_line(index, row[4], row[:4], row[5], row[6], width, height))
+            mode_label = "window"
+        else:
+            for key_pos, frame_path in enumerate(frames):
+                ref_pos = sample_ref_positions(
+                    len(frames), key_pos, args.num_ref_frames, max(1, args.clip_stride), args.ref_sample
+                )
+                clip_paths = [frame_path] + [frames[p] for p in ref_pos]
+                tensor, key_img0 = load_clip(clip_paths, args.imgsz, stride)
+                tensor = tensor.to(device, non_blocking=True).float() / 255.0
+                set_clip_layout(yolo.model, (1, len(clip_paths)), num_ref_frames=args.num_ref_frames)
+                with torch.inference_mode():
+                    pred = yolo.model(tensor)
+                det = ops.non_max_suppression(pred, args.conf, args.iou, max_det=args.max_det, in_place=False)[0]
+                if len(det):
+                    ops.scale_boxes(tensor.shape[2:], det[:, :4], key_img0.shape)
 
-            tracks = tracker.update(det_namespace(det))
-            height, width = key_img0.shape[:2]
-            index = frame_index(frame_path, key_pos + 1)
-            if len(tracks):
-                order = np.argsort(tracks[:, 5])[::-1]
-                for row_index in order:
-                    row = tracks[row_index]
-                    lines.append(format_track_line(index, row[4], row[:4], row[5], row[6], width, height))
+                tracks = tracker.update(det_namespace(det))
+                height, width = key_img0.shape[:2]
+                index = frame_index(frame_path, key_pos + 1)
+                if len(tracks):
+                    order = np.argsort(tracks[:, 5])[::-1]
+                    for row_index in order:
+                        row = tracks[row_index]
+                        lines.append(format_track_line(index, row[4], row[:4], row[5], row[6], width, height))
+            mode_label = "clip"
 
         output = args.out / f"{seq_dir.name}.txt"
         output.write_text("".join(lines), encoding="utf-8")
-        print(f"{seq_dir.name}: {len(frames)} frames, {len(lines)} clip tracks -> {output}")
+        print(f"{seq_dir.name}: {len(frames)} frames, {len(lines)} {mode_label} tracks -> {output}")
 
 
 if __name__ == "__main__":

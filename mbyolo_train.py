@@ -98,9 +98,10 @@ def build_extra_eval_callback(opt):
         scripts = Path(ROOT) / "tools"
 
         try:
+            use_clip_export = opt.extra_eval_clip_inference or opt.extra_eval_window_inference
             export_script = (
                 scripts / "export_visdrone_vid_clip_results.py"
-                if opt.extra_eval_clip_inference
+                if use_clip_export
                 else scripts / "export_visdrone_vid_results.py"
             )
             export_cmd = [
@@ -121,7 +122,7 @@ def build_extra_eval_callback(opt):
                 "--iou",
                 opt.extra_eval_iou,
             ]
-            if opt.extra_eval_clip_inference:
+            if use_clip_export:
                 export_cmd.extend(
                     [
                         "--num_ref_frames",
@@ -132,6 +133,8 @@ def build_extra_eval_callback(opt):
                         opt.ref_sample if opt.ref_sample in {"adjacent", "causal"} else "adjacent",
                     ]
                 )
+                if opt.extra_eval_window_inference:
+                    export_cmd.extend(["--all_keys", "--window_size", opt.vid_window_size or opt.num_ref_frames + 1])
             else:
                 export_cmd.extend(["--batch", opt.extra_eval_batch])
             steps.append(run_extra_eval_step("export_detections", export_cmd, strict))
@@ -154,7 +157,7 @@ def build_extra_eval_callback(opt):
             )
             track_export_script = (
                 scripts / "export_visdrone_vid_clip_tracks.py"
-                if opt.extra_eval_clip_inference
+                if use_clip_export
                 else scripts / "export_visdrone_vid_tracks.py"
             )
             track_cmd = [
@@ -177,7 +180,7 @@ def build_extra_eval_callback(opt):
                 "--iou",
                 opt.extra_eval_iou,
             ]
-            if opt.extra_eval_clip_inference:
+            if use_clip_export:
                 track_cmd.extend(
                     [
                         "--num_ref_frames",
@@ -188,6 +191,8 @@ def build_extra_eval_callback(opt):
                         opt.ref_sample if opt.ref_sample in {"adjacent", "causal"} else "adjacent",
                     ]
                 )
+                if opt.extra_eval_window_inference:
+                    track_cmd.extend(["--all_keys", "--window_size", opt.vid_window_size or opt.num_ref_frames + 1])
             steps.append(run_extra_eval_step("export_tracks", track_cmd, strict))
             steps.append(
                 run_extra_eval_step(
@@ -433,6 +438,7 @@ def parse_opt():
     parser.add_argument('--extra_eval_track_conf', type=float, default=0.1, help='confidence threshold for tracking export')
     parser.add_argument('--extra_eval_iou', type=float, default=0.7, help='NMS IoU threshold for extra eval exports')
     parser.add_argument('--extra_eval_clip_inference', action='store_true', help='export detections with explicit key+ref clip inference instead of streaming')
+    parser.add_argument('--extra_eval_window_inference', action='store_true', help='export detections/tracks with non-overlapping VID windows; every frame is inferred once')
     parser.add_argument('--extra_eval_strict', action='store_true', help='fail training if an extra-eval step fails')
     opt = parser.parse_args()
     return opt
