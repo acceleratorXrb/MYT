@@ -230,6 +230,116 @@ class ProposalTemporalRefiner(nn.Module):
         k = max(1, min(int(k), score.shape[1]))
         return score.topk(k, dim=1)
 
+    @staticmethod
+    def _gather_window_tokens(x: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
+        """Gather `(B, T, K, C)` tokens from `(B, T, C, H, W)` by spatial indices `(B, T, K)`."""
+        B, T, C, _, _ = x.shape
+        flat = x.flatten(3).permute(0, 1, 3, 2)  # (B, T, HW, C)
+        return flat.gather(2, idx.unsqueeze(-1).expand(B, T, idx.shape[2], C))
+
+    @staticmethod
+    def _gather_window_logits(x: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
+        """Gather `(B, T, K, C)` logits/probs from `(B, T, C, H, W)` by `(B, T, K)` indices."""
+        B, T, C, _, _ = x.shape
+        flat = x.flatten(3).permute(0, 1, 3, 2)  # (B, T, HW, C)
+        return flat.gather(2, idx.unsqueeze(-1).expand(B, T, idx.shape[2], C))
+
+    def forward_window(
+        self,
+        feat: torch.Tensor,
+        logits: torch.Tensor,
+        reg: torch.Tensor | None = None,
+        frame_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Refine all key frames in a video window in one proposal attention pass.
+
+        Args:
+            feat:       (B, T, C, H, W)
+            logits:     (B, T, nc, H, W)
+            reg:        optional (B, T, Cr, H, W)
+            frame_mask: optional bool (T, T), where mask[q, r] allows q to
+                attend to proposals from frame r. Diagonal is usually False.
+
+        Returns:
+            Refined logits with shape (B, T, nc, H, W).
+        """
+        B, T, C, H, W = feat.shape
+        if T <= 1:
+            return logits
+
+        HW = H * W
+        topk = max(1, min(int(getattr(self, "topk", 150) or 1), HW))
+        score = logits.sigmoid().amax(dim=2).flatten(2)  # (B, T, HW)
+        vals, idx = score.topk(topk, dim=2)              # (B, T, K)
+        valid_mask = vals.reshape(B, T * topk) > float(getattr(self, "conf_thr", 0.001) or 0.0)
+        valid_any = valid_mask.any(dim=1)
+        if not valid_any.any():
+            return logits
+        safe_mask = valid_mask.clone()
+        safe_mask[~valid_any, 0] = True
+
+        feat_tok = self._gather_window_tokens(feat, idx)             # (B, T, K, C)
+        prob_tok = self._gather_window_logits(logits.sigmoid(), idx) # (B, T, K, nc)
+        q_tok = feat_tok.reshape(B, T * topk, C)
+        r_tok = q_tok
+        q = F.normalize(self.q(q_tok), dim=-1)
+        k = F.normalize(self.k(r_tok), dim=-1)
+        attn = torch.bmm(q, k.transpose(1, 2)) / max(C ** 0.5, 1.0)  # (B, T*K, T*K)
+
+        q_prob = prob_tok.reshape(B, T * topk, self.nc)
+        r_prob = q_prob
+        cls_gain = float(getattr(self, "cls_sim_gain", 0.5) or 0.0)
+        if cls_gain > 0:
+            cls_sim = torch.bmm(F.normalize(q_prob, dim=-1), F.normalize(r_prob, dim=-1).transpose(1, 2))
+            attn = attn + cls_gain * cls_sim
+
+        reg_gain = float(getattr(self, "reg_sim_gain", 0.25) or 0.0)
+        if reg_gain > 0 and reg is not None:
+            Cr = reg.shape[2]
+            reg_tok = self._gather_window_tokens(reg, idx).reshape(B, T * topk, Cr)
+            reg_sim = torch.bmm(F.normalize(reg_tok, dim=-1), F.normalize(reg_tok, dim=-1).transpose(1, 2))
+            attn = attn + reg_gain * reg_sim
+
+        spatial_sigma = float(getattr(self, "spatial_sigma", 0.05) or 0.0)
+        if spatial_sigma > 0:
+            flat_idx = idx.reshape(B, T * topk)
+            y = (flat_idx // W).to(dtype=feat.dtype) / max(H - 1, 1)
+            x = (flat_idx % W).to(dtype=feat.dtype) / max(W - 1, 1)
+            dist2 = (y.unsqueeze(2) - y.unsqueeze(1)).pow(2) + (x.unsqueeze(2) - x.unsqueeze(1)).pow(2)
+            attn = attn - dist2 / (2.0 * max(spatial_sigma ** 2, 1e-6))
+
+        score_gain = float(getattr(self, "score_gain", 0.25) or 0.0)
+        if score_gain > 0:
+            attn = attn + score_gain * torch.log(vals.reshape(B, T * topk).clamp_min(1e-6)).unsqueeze(1)
+
+        if frame_mask is None:
+            frame_mask = ~torch.eye(T, device=feat.device, dtype=torch.bool)
+        else:
+            frame_mask = frame_mask.to(device=feat.device, dtype=torch.bool)
+        token_mask = frame_mask.repeat_interleave(topk, dim=0).repeat_interleave(topk, dim=1)  # (T*K, T*K)
+        safe_mask = safe_mask & token_mask.any(dim=0).view(1, -1)
+        attn = attn.masked_fill(~token_mask.view(1, T * topk, T * topk), float("-inf"))
+        attn = attn.masked_fill(~safe_mask.unsqueeze(1), float("-inf"))
+        row_has_valid = (token_mask.view(1, T * topk, T * topk) & safe_mask.unsqueeze(1)).any(dim=2)
+        attn = torch.where(row_has_valid.unsqueeze(2), attn, torch.zeros_like(attn))
+
+        weights = attn.softmax(dim=-1)
+        agg = torch.bmm(weights, self.v(r_tok))
+        gate = torch.sigmoid(self.gate(torch.cat((q_tok, agg), dim=-1)))
+        fused = q_tok + gate * (agg - q_tok)
+
+        delta = self.out(self.norm(fused)) * self.alpha.to(dtype=logits.dtype, device=logits.device)
+        center_uncertain = 1.0 - vals.reshape(B, T * topk, 1).clamp(0.0, 1.0)
+        delta = delta * center_uncertain
+        delta = torch.where(row_has_valid.unsqueeze(-1), delta, torch.zeros_like(delta))
+        delta = torch.where(valid_any.view(B, 1, 1), delta, torch.zeros_like(delta))
+
+        out_flat = logits.flatten(3).clone()
+        scatter_idx = idx.unsqueeze(2).expand(B, T, self.nc, topk)
+        scatter_src = delta.view(B, T, topk, self.nc).permute(0, 1, 3, 2)
+        out_flat.scatter_add_(3, scatter_idx, scatter_src)
+        return out_flat.view(B, T, self.nc, H, W)
+
     def forward(
         self,
         key_feat: torch.Tensor,

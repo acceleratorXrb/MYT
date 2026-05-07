@@ -229,6 +229,14 @@ class Detect_VID(Detect):
             picked.extend([picked[-1]] * (num_refs - len(picked)))
         return picked[:num_refs]
 
+    def _window_ref_mask(self, T: int, num_refs: int, device: torch.device) -> torch.Tensor:
+        mask = torch.zeros(T, T, dtype=torch.bool, device=device)
+        for key_pos in range(T):
+            ref_idx = self._window_ref_indices(key_pos, T, num_refs)
+            if ref_idx:
+                mask[key_pos, torch.tensor(ref_idx, device=device, dtype=torch.long)] = True
+        return mask
+
     def _aggregate_one_key(
         self,
         i: int,
@@ -281,6 +289,28 @@ class Detect_VID(Detect):
         if self.clip_all_keys:
             num_refs = min(int(getattr(self, "num_ref_frames", T - 1)), max(T - 1, 0))
             ref_debug = []
+            mode = self._fusion_mode()
+            if mode == "proposal":
+                for key_pos in range(min(T, 5)):
+                    ref_debug.append((key_pos, self._window_ref_indices(key_pos, T, num_refs)))
+                frame_mask = self._window_ref_mask(T, num_refs, pre_full.device)
+                cls_all = self.proposal_refiners[i].forward_window(pre_clip, cls_clip, reg_clip, frame_mask).reshape(
+                    B * T, self.nc, H, W
+                )
+                out = torch.cat((reg_full, cls_all), 1)
+                if bool(getattr(self, "debug_vid_head", False)) and self._debug_vid_head_printed < 6:
+                    print(
+                        "[debug-vid-head] "
+                        f"mode=window level={i} B={B} T={T} clip_all_keys={self.clip_all_keys} "
+                        f"num_ref_frames={self.num_ref_frames} fusion={mode} proposal_vectorized=True "
+                        f"proposal_topk={getattr(self.proposal_refiners[i], 'topk', None)} ref_debug={ref_debug} "
+                        f"pre_shape={tuple(pre_full.shape)} reg_shape={tuple(reg_full.shape)} "
+                        f"out_shape={tuple(out.shape)} aux=None",
+                        flush=True,
+                    )
+                    self._debug_vid_head_printed += 1
+                return (out, None) if return_aux else out
+
             cls_outs = []
             for key_pos in range(T):
                 ref_idx = self._window_ref_indices(key_pos, T, num_refs)
