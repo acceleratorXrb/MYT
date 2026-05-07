@@ -136,6 +136,7 @@ fam_alpha_target: 1.0 # (float) target FAM alpha value at the end of warmup
 debug_clip_shape: False # (bool) print first training batch image shape and clip layout
 debug_clip_aug: False # (bool) print first few VID clip augmentation decisions and output shapes
 debug_clip_refs: False # (bool) print first few VID key/ref frame paths and positions
+debug_vid_head: False # (bool) print first few Detect_VID temporal head shapes and ref indices
 
 # Custom config.yaml ---------------------------------------------------------------------------------------------------
 cfg: # (str, optional) for overriding defaults.yaml

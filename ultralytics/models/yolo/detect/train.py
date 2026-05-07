@@ -92,6 +92,7 @@ class DetectionTrainer(BaseTrainer):
                 head.temporal_fusion = getattr(self.args, "temporal_fusion", "fam")
                 head.fam_conf_boost = float(getattr(self.args, "fam_conf_boost", 0.0) or 0.0)
                 head.temporal_cls_consistency = float(getattr(self.args, "temporal_cls_consistency", 0.0) or 0.0)
+                head.debug_vid_head = bool(getattr(self.args, "debug_vid_head", False))
                 spatial_sigma = float(getattr(self.args, "fam_spatial_sigma", 0.2) or 0.0)
                 for fam in getattr(head, "fams", []):
                     fam.spatial_sigma = spatial_sigma

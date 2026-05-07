@@ -124,6 +124,8 @@ class Detect_VID(Detect):
         self.temporal_fusion = "fam"  # fam | logits | logits_gated | none
         self.fam_conf_boost = 0.0
         self.temporal_cls_consistency = 0.0
+        self.debug_vid_head = False
+        self._debug_vid_head_printed = 0
         self.clip_layout: tuple[int, int] | None = None  # (B, T); set by trainer
         self.clip_all_keys = False
         self.aux_outputs: list[torch.Tensor] | None = None  # ref-frame predictions for auxiliary loss
@@ -259,9 +261,12 @@ class Detect_VID(Detect):
 
         if self.clip_all_keys:
             num_refs = min(int(getattr(self, "num_ref_frames", T - 1)), max(T - 1, 0))
+            ref_debug = []
             cls_outs = []
             for key_pos in range(T):
                 ref_idx = self._window_ref_indices(key_pos, T, num_refs)
+                if key_pos < 5:
+                    ref_debug.append((key_pos, ref_idx))
                 if ref_idx:
                     cls_out = self._aggregate_one_key(
                         i,
@@ -275,6 +280,16 @@ class Detect_VID(Detect):
                 cls_outs.append(cls_out)
             cls_all = torch.stack(cls_outs, dim=1).reshape(B * T, self.nc, H, W)
             out = torch.cat((reg_full, cls_all), 1)
+            if bool(getattr(self, "debug_vid_head", False)) and self._debug_vid_head_printed < 6:
+                print(
+                    "[debug-vid-head] "
+                    f"mode=window level={i} B={B} T={T} clip_all_keys={self.clip_all_keys} "
+                    f"num_ref_frames={self.num_ref_frames} ref_debug={ref_debug} "
+                    f"pre_shape={tuple(pre_full.shape)} reg_shape={tuple(reg_full.shape)} "
+                    f"out_shape={tuple(out.shape)} aux=None",
+                    flush=True,
+                )
+                self._debug_vid_head_printed += 1
             return (out, None) if return_aux else out
 
         key_pre = pre_clip[:, 0]                                    # (B, c3, H, W)
@@ -287,6 +302,16 @@ class Detect_VID(Detect):
         reg_clip = reg_full.view(B, T, Cr, H, W)
         reg_key = reg_clip[:, 0]                                    # (B, 4*reg_max, H, W)
         key_out = torch.cat((reg_key, cls_out), 1)
+        if bool(getattr(self, "debug_vid_head", False)) and self._debug_vid_head_printed < 6:
+            print(
+                "[debug-vid-head] "
+                f"mode=center level={i} B={B} T={T} clip_all_keys={self.clip_all_keys} "
+                f"num_ref_frames={self.num_ref_frames} ref_count={ref_pre.shape[1]} "
+                f"pre_shape={tuple(pre_full.shape)} reg_key_shape={tuple(reg_key.shape)} "
+                f"out_shape={tuple(key_out.shape)}",
+                flush=True,
+            )
+            self._debug_vid_head_printed += 1
         if not return_aux:
             return key_out
 
