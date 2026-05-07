@@ -89,6 +89,7 @@ class DetectionTrainer(BaseTrainer):
                 cl = batch["clip_layout"].view(-1)
                 head.clip_layout = (int(cl[0].item()), int(cl[1].item()))
                 head.clip_all_keys = bool(int(batch.get("clip_all_keys", torch.tensor([0], device=self.device)).view(-1)[0].item()))
+                head.num_ref_frames = int(getattr(self.args, "num_ref_frames", head.num_ref_frames))
                 head.temporal_fusion = getattr(self.args, "temporal_fusion", "fam")
                 head.fam_conf_boost = float(getattr(self.args, "fam_conf_boost", 0.0) or 0.0)
                 head.temporal_cls_consistency = float(getattr(self.args, "temporal_cls_consistency", 0.0) or 0.0)

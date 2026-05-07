@@ -278,6 +278,7 @@ class VIDClipDataset(YOLODataset):
         first["img"] = clip
         first["clip_T"] = clip.shape[0]
         first["clip_all_keys"] = True
+        first["im_file"] = [self.im_files[i] for i in frame_idxs]
         first["cls"] = torch.cat(cls, 0) if cls else torch.zeros((0, 1), dtype=first["cls"].dtype)
         first["bboxes"] = torch.cat(bboxes, 0) if bboxes else torch.zeros((0, 4), dtype=first["bboxes"].dtype)
         first["batch_idx"] = torch.cat(batch_idx, 0) if batch_idx else torch.zeros((0,), dtype=first["batch_idx"].dtype)
@@ -455,6 +456,8 @@ class VIDClipDataset(YOLODataset):
                 continue
             elif k in {"masks", "keypoints", "bboxes", "cls", "segments", "obb", "ref_bboxes", "ref_cls"}:
                 new_batch[k] = torch.cat(value, 0)
+            elif k == "im_file" and all_keys:
+                new_batch[k] = [p for paths in value for p in (paths if isinstance(paths, list) else [paths])]
             else:
                 new_batch[k] = list(value)
 
