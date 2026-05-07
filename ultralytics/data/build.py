@@ -109,6 +109,8 @@ def build_yolo_dataset(cfg, img_path, batch, data, mode="train", rect=False, str
             num_ref_frames=getattr(cfg, "num_ref_frames", 4) if mode == "train" else 0,
             clip_stride=getattr(cfg, "clip_stride", 1),
             ref_sample=getattr(cfg, "ref_sample", "adjacent"),
+            clip_mode=getattr(cfg, "vid_clip_mode", "center") if mode == "train" else "center",
+            window_size=getattr(cfg, "vid_window_size", None),
             debug_clip_aug=getattr(cfg, "debug_clip_aug", False),
             debug_clip_refs=getattr(cfg, "debug_clip_refs", False),
         )

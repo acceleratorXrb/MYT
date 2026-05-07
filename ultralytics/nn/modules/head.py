@@ -125,6 +125,7 @@ class Detect_VID(Detect):
         self.fam_conf_boost = 0.0
         self.temporal_cls_consistency = 0.0
         self.clip_layout: tuple[int, int] | None = None  # (B, T); set by trainer
+        self.clip_all_keys = False
         self.aux_outputs: list[torch.Tensor] | None = None  # ref-frame predictions for auxiliary loss
         self.temporal_consistency_losses: list[torch.Tensor] | None = None
         # streaming inference buffer (per detection level)
@@ -200,6 +201,44 @@ class Detect_VID(Detect):
         loss = F.smooth_l1_loss(key_prob, ref_prob, reduction="none").mean(dim=1, keepdim=True)
         return (loss * weight).sum() / weight.sum().clamp_min(1.0)
 
+    def _window_ref_indices(self, key_pos: int, T: int, num_refs: int) -> list[int]:
+        if T <= 1 or num_refs <= 0:
+            return []
+        left_count = num_refs // 2
+        right_count = num_refs - left_count
+        desired = list(range(key_pos - left_count, key_pos)) + list(range(key_pos + 1, key_pos + right_count + 1))
+        picked = [p for p in desired if 0 <= p < T and p != key_pos]
+        if len(picked) < num_refs:
+            candidates = [p for p in range(T) if p != key_pos and p not in picked]
+            candidates.sort(key=lambda p: (abs(p - key_pos), p))
+            picked.extend(candidates[: num_refs - len(picked)])
+        if len(picked) < num_refs and picked:
+            picked.extend([picked[-1]] * (num_refs - len(picked)))
+        return picked[:num_refs]
+
+    def _aggregate_one_key(
+        self,
+        i: int,
+        key_pre: torch.Tensor,
+        key_logits: torch.Tensor,
+        ref_pre: torch.Tensor,
+        ref_logits: torch.Tensor,
+    ) -> torch.Tensor:
+        mode = self._fusion_mode()
+        if mode == "fam":
+            agg_pre = self.fams[i](key_pre, ref_pre, ref_logits)
+            cls_out = self._cv3_cls(i, agg_pre)
+            cls_out = self._ref_conf_boost(i, cls_out, ref_logits)
+        elif mode == "logits":
+            cls_out = self._logits_fuse(i, key_logits, ref_logits)
+        elif mode == "logits_gated":
+            cls_out = self._logits_fuse(i, key_logits, ref_logits, gated=True)
+        else:
+            cls_out = key_logits
+        if self.training and self.temporal_consistency_losses is not None:
+            self.temporal_consistency_losses.append(self._clip_cls_consistency_loss(cls_out, ref_logits))
+        return cls_out
+
     def _aggregate_clip(
         self, i: int, x_i: torch.Tensor, B: int, T: int, return_aux: bool = False
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor | None]:
@@ -218,23 +257,31 @@ class Detect_VID(Detect):
         cls_full = self._cv3_cls(i, pre_full)                       # (B*T, nc, H, W)
         cls_clip = cls_full.view(B, T, self.nc, H, W)
 
+        if self.clip_all_keys:
+            num_refs = min(int(getattr(self, "num_ref_frames", T - 1)), max(T - 1, 0))
+            cls_outs = []
+            for key_pos in range(T):
+                ref_idx = self._window_ref_indices(key_pos, T, num_refs)
+                if ref_idx:
+                    cls_out = self._aggregate_one_key(
+                        i,
+                        pre_clip[:, key_pos],
+                        cls_clip[:, key_pos],
+                        pre_clip[:, ref_idx],
+                        cls_clip[:, ref_idx],
+                    )
+                else:
+                    cls_out = cls_clip[:, key_pos]
+                cls_outs.append(cls_out)
+            cls_all = torch.stack(cls_outs, dim=1).reshape(B * T, self.nc, H, W)
+            out = torch.cat((reg_full, cls_all), 1)
+            return (out, None) if return_aux else out
+
         key_pre = pre_clip[:, 0]                                    # (B, c3, H, W)
         ref_pre = pre_clip[:, 1:]                                   # (B, T-1, c3, H, W)
         ref_logits = cls_clip[:, 1:]                                # (B, T-1, nc, H, W)
 
-        mode = self._fusion_mode()
-        if mode == "fam":
-            agg_pre = self.fams[i](key_pre, ref_pre, ref_logits)    # (B, c3, H, W)
-            cls_out = self._cv3_cls(i, agg_pre)                     # (B, nc, H, W)
-            cls_out = self._ref_conf_boost(i, cls_out, ref_logits)
-        elif mode == "logits":
-            cls_out = self._logits_fuse(i, cls_clip[:, 0], ref_logits)
-        elif mode == "logits_gated":
-            cls_out = self._logits_fuse(i, cls_clip[:, 0], ref_logits, gated=True)
-        else:
-            cls_out = cls_clip[:, 0]
-        if self.training and self.temporal_consistency_losses is not None:
-            self.temporal_consistency_losses.append(self._clip_cls_consistency_loss(cls_out, ref_logits))
+        cls_out = self._aggregate_one_key(i, key_pre, cls_clip[:, 0], ref_pre, ref_logits)
 
         Cr = reg_full.shape[1]
         reg_clip = reg_full.view(B, T, Cr, H, W)

@@ -264,6 +264,8 @@ class v8VIDDetectionLoss(v8DetectionLoss):
     def __call__(self, preds, batch):
         total_loss, loss_items = super().__call__(preds, batch)
         aux_gain = float(getattr(self.hyp, "ref_aux_loss", 0.0) or 0.0)
+        if str(getattr(self.hyp, "vid_clip_mode", "center") or "center").lower() == "window":
+            aux_gain = 0.0
         head = self.model.model[-1]
         extra_items = []
 

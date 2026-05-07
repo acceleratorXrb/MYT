@@ -48,6 +48,8 @@ class VIDClipDataset(YOLODataset):
         num_ref_frames: int = 4,
         clip_stride: int = 1,
         ref_sample: str = "adjacent",
+        clip_mode: str = "center",
+        window_size: int | None = None,
         seq_key: str = "parent",
         debug_clip_aug: bool = False,
         debug_clip_refs: bool = False,
@@ -63,10 +65,22 @@ class VIDClipDataset(YOLODataset):
         self._debug_clip_refs_printed = 0
         if ref_sample not in {"adjacent", "causal", "uniform_local", "uniform_global"}:
             raise ValueError(f"ref_sample must be adjacent|causal|uniform_local|uniform_global, got {ref_sample}")
+        if clip_mode not in {"center", "window"}:
+            raise ValueError(f"clip_mode must be center|window, got {clip_mode}")
         self._vid_ref_sample = ref_sample
+        self._vid_clip_mode = clip_mode
+        self._vid_window_size = int(window_size or (self._vid_num_ref + 1))
         self._vid_seq_key = seq_key
         super().__init__(*args, **kwargs)
         self._build_seq_index()
+        self._build_windows()
+
+    def __len__(self):
+        return (
+            len(self.windows)
+            if getattr(self, "_vid_clip_mode", "center") == "window" and hasattr(self, "windows")
+            else super().__len__()
+        )
 
     # ----- transforms: disable multi-image aug; sync single-image aug in __getitem__ -----
     def build_transforms(self, hyp=None):
@@ -102,6 +116,27 @@ class VIDClipDataset(YOLODataset):
         for name, idxs in self.seqs.items():
             for pos, idx in enumerate(idxs):
                 self.idx2seqpos[idx] = (name, pos)
+
+    def _build_windows(self) -> None:
+        self.windows: list[list[int]] = []
+        if self._vid_clip_mode != "window":
+            return
+        W = max(1, self._vid_window_size)
+        stride = max(1, self._vid_stride)
+        for seq_idxs in self.seqs.values():
+            if len(seq_idxs) <= W:
+                self.windows.append(seq_idxs)
+                continue
+            start = 0
+            while start < len(seq_idxs):
+                window = seq_idxs[start : start + W]
+                if len(window) < W:
+                    # Keep the tail without replaying the whole sequence.
+                    window = seq_idxs[-W:]
+                    if self.windows and self.windows[-1] == window:
+                        break
+                self.windows.append(window)
+                start += W * stride
 
     # ----- reference sampling -----
     def _sample_adjacent_refs(self, seq_idxs: list[int], key_pos: int, num_refs: int) -> list[int]:
@@ -228,6 +263,39 @@ class VIDClipDataset(YOLODataset):
         )
         return key_sample
 
+    def _build_window(self, window_idx: int):
+        frame_idxs = self.windows[window_idx]
+        aug_seed = random.randint(0, 2**32 - 1)
+        samples = [self._get_sync_aug_sample(i, aug_seed) for i in frame_idxs]
+        clip = torch.stack([s["img"] for s in samples], dim=0)
+        first = samples[0]
+        cls, bboxes, batch_idx = [], [], []
+        for pos, s in enumerate(samples):
+            if s.get("cls") is not None and len(s["cls"]):
+                cls.append(s["cls"])
+                bboxes.append(s["bboxes"])
+                batch_idx.append(torch.full((len(s["cls"]),), pos, dtype=s["batch_idx"].dtype))
+        first["img"] = clip
+        first["clip_T"] = clip.shape[0]
+        first["clip_all_keys"] = True
+        first["cls"] = torch.cat(cls, 0) if cls else torch.zeros((0, 1), dtype=first["cls"].dtype)
+        first["bboxes"] = torch.cat(bboxes, 0) if bboxes else torch.zeros((0, 4), dtype=first["bboxes"].dtype)
+        first["batch_idx"] = torch.cat(batch_idx, 0) if batch_idx else torch.zeros((0,), dtype=first["batch_idx"].dtype)
+        first["ref_cls"] = torch.zeros((0, 1), dtype=first["cls"].dtype)
+        first["ref_bboxes"] = torch.zeros((0, 4), dtype=first["bboxes"].dtype)
+        first["ref_batch_idx"] = torch.zeros((0,), dtype=first["batch_idx"].dtype)
+
+        if self._debug_clip_refs and self._debug_clip_refs_printed < 5:
+            paths = [self.im_files[i] for i in frame_idxs]
+            print(
+                "[debug-clip-window] "
+                f"window_idx={window_idx} T={clip.shape[0]} num_ref_frames={self._vid_num_ref} "
+                f"clip_stride={self._vid_stride} paths={paths}",
+                flush=True,
+            )
+            self._debug_clip_refs_printed += 1
+        return first
+
     def _debug_print_clip_refs(self, idx: int, ref_idxs: list[int]):
         if not self._debug_clip_refs or self._debug_clip_refs_printed >= 5:
             return
@@ -345,6 +413,10 @@ class VIDClipDataset(YOLODataset):
 
     # ----- per-sample assembly -----
     def __getitem__(self, idx: int):
+        if self._vid_clip_mode == "window":
+            sample = self._build_window(idx)
+            self._debug_print_clip_aug(idx, sample, False, False)
+            return sample
         sample = self._build_clip(idx)
         mosaic_applied = False
         mixup_applied = False
@@ -369,6 +441,7 @@ class VIDClipDataset(YOLODataset):
         if any(t != T for t in T_per_sample):
             raise RuntimeError(f"Inconsistent clip lengths in batch: {T_per_sample}")
         B = len(batch)
+        all_keys = bool(batch[0].get("clip_all_keys", False))
 
         for i, k in enumerate(keys):
             value = values[i]
@@ -378,6 +451,8 @@ class VIDClipDataset(YOLODataset):
                 new_batch[k] = stacked.view(B * T, *stacked.shape[2:])
             elif k == "clip_T":
                 continue  # consumed
+            elif k == "clip_all_keys":
+                continue
             elif k in {"masks", "keypoints", "bboxes", "cls", "segments", "obb", "ref_bboxes", "ref_cls"}:
                 new_batch[k] = torch.cat(value, 0)
             else:
@@ -388,7 +463,7 @@ class VIDClipDataset(YOLODataset):
         # the loss takes preds of shape (B, no, H, W) which is what Detect_VID emits.
         bi = list(new_batch.get("batch_idx", []))
         for i in range(len(bi)):
-            bi[i] = bi[i] + i
+            bi[i] = bi[i] + (i * T if all_keys else i)
         new_batch["batch_idx"] = torch.cat(bi, 0) if bi else torch.zeros(0)
 
         # ref_batch_idx indexes auxiliary predictions over flattened ref frames:
@@ -401,4 +476,5 @@ class VIDClipDataset(YOLODataset):
 
         # Stash clip layout for the trainer / Detect_VID head
         new_batch["clip_layout"] = torch.tensor([B, T], dtype=torch.long)
+        new_batch["clip_all_keys"] = torch.tensor([1 if all_keys else 0], dtype=torch.long)
         return new_batch

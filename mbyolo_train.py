@@ -389,6 +389,8 @@ def parse_opt():
     parser.add_argument('--num_ref_frames', type=int, default=4, help='reference frames per clip for VIDClipDataset (0 disables FAM)')
     parser.add_argument('--clip_stride', type=int, default=1, help='temporal stride between sampled refs')
     parser.add_argument('--ref_sample', default='adjacent', choices=['adjacent', 'causal', 'uniform_local', 'uniform_global'], help='ref-frame sampling strategy')
+    parser.add_argument('--vid_clip_mode', default='center', choices=['center', 'window'], help='VID training clip layout: center repeats refs; window uses each frame once inside a temporal window')
+    parser.add_argument('--vid_window_size', type=int, default=None, help='frames per window when --vid_clip_mode window; defaults to num_ref_frames+1')
     parser.add_argument('--ref_aux_loss', type=float, default=0.0, help='auxiliary detection loss weight for reference frames')
     parser.add_argument('--temporal_fusion', default='fam', choices=['fam', 'logits', 'logits_gated', 'none'], help='Detect_VID temporal fusion mode')
     parser.add_argument('--fam_conf_boost', type=float, default=0.0, help='positive-only ref confidence boost gain for FAM mode')
@@ -436,6 +438,8 @@ if __name__ == '__main__':
         "num_ref_frames": opt.num_ref_frames,
         "clip_stride": opt.clip_stride,
         "ref_sample": opt.ref_sample,
+        "vid_clip_mode": opt.vid_clip_mode,
+        "vid_window_size": opt.vid_window_size or 0,
         "ref_aux_loss": opt.ref_aux_loss,
         "temporal_fusion": opt.temporal_fusion,
         "fam_conf_boost": opt.fam_conf_boost,

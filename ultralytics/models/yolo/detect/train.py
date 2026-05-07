@@ -5,6 +5,7 @@ import random
 from copy import copy
 
 import numpy as np
+import torch
 import torch.nn as nn
 
 from ultralytics.data import build_dataloader, build_yolo_dataset
@@ -21,6 +22,9 @@ def _plot_images_for_training_batch(batch):
     images = batch["img"]
     clip_layout = batch.get("clip_layout")
     if clip_layout is None:
+        return images
+    clip_all_keys = batch.get("clip_all_keys")
+    if clip_all_keys is not None and int(clip_all_keys.view(-1)[0].item()) == 1:
         return images
 
     layout = clip_layout.view(-1)
@@ -84,6 +88,7 @@ class DetectionTrainer(BaseTrainer):
             if isinstance(head, Detect_VID):
                 cl = batch["clip_layout"].view(-1)
                 head.clip_layout = (int(cl[0].item()), int(cl[1].item()))
+                head.clip_all_keys = bool(int(batch.get("clip_all_keys", torch.tensor([0], device=self.device)).view(-1)[0].item()))
                 head.temporal_fusion = getattr(self.args, "temporal_fusion", "fam")
                 head.fam_conf_boost = float(getattr(self.args, "fam_conf_boost", 0.0) or 0.0)
                 head.temporal_cls_consistency = float(getattr(self.args, "temporal_cls_consistency", 0.0) or 0.0)
@@ -136,7 +141,10 @@ class DetectionTrainer(BaseTrainer):
         head = de_parallel(self.model).model[-1]
         loss_names = ["box_loss", "cls_loss", "dfl_loss"]
         if isinstance(head, Detect_VID):
-            if float(getattr(self.args, "ref_aux_loss", 0.0) or 0.0) > 0.0:
+            if (
+                str(getattr(self.args, "vid_clip_mode", "center") or "center").lower() != "window"
+                and float(getattr(self.args, "ref_aux_loss", 0.0) or 0.0) > 0.0
+            ):
                 loss_names.extend(["ref_box_loss", "ref_cls_loss", "ref_dfl_loss"])
             if float(getattr(self.args, "temporal_cls_consistency", 0.0) or 0.0) > 0.0:
                 loss_names.append("temporal_cls_loss")
