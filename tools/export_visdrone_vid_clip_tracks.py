@@ -20,6 +20,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from export_visdrone_vid_clip_results import (
+    configure_temporal_options,
     frame_index,
     image_files,
     load_clip,
@@ -46,6 +47,14 @@ def parse_args():
     parser.add_argument("--ref_sample", default="adjacent", choices=["adjacent", "causal"])
     parser.add_argument("--all_keys", action="store_true", help="Infer non-overlapping windows and track every frame once.")
     parser.add_argument("--window_size", type=int, default=16, help="Frames per window when --all_keys is enabled.")
+    parser.add_argument("--temporal_fusion", default=None, choices=["fam", "proposal", "yolov", "fam_proposal", "logits", "logits_gated", "none"])
+    parser.add_argument("--fam_conf_boost", type=float, default=None)
+    parser.add_argument("--fam_spatial_sigma", type=float, default=None)
+    parser.add_argument("--proposal_topk", type=int, default=None)
+    parser.add_argument("--proposal_spatial_sigma", type=float, default=None)
+    parser.add_argument("--proposal_cls_sim_gain", type=float, default=None)
+    parser.add_argument("--proposal_reg_sim_gain", type=float, default=None)
+    parser.add_argument("--proposal_score_gain", type=float, default=None)
     return parser.parse_args()
 
 
@@ -110,6 +119,7 @@ def main():
     device = select_device(args.device)
     yolo = YOLO(str(args.weights))
     yolo.model.to(device).eval()
+    configure_temporal_options(yolo.model, args)
     stride = int(max(getattr(yolo.model, "stride", torch.tensor([32])).max().item(), 32))
     seq_root = resolve_sequence_root(args.source)
     seq_dirs = sorted(p for p in seq_root.iterdir() if p.is_dir())

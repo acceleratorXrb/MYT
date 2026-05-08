@@ -30,6 +30,14 @@ def parse_args():
     parser.add_argument("--ref_sample", default="adjacent", choices=["adjacent", "causal"])
     parser.add_argument("--all_keys", action="store_true", help="Infer non-overlapping windows and output every frame once.")
     parser.add_argument("--window_size", type=int, default=16, help="Frames per window when --all_keys is enabled.")
+    parser.add_argument("--temporal_fusion", default=None, choices=["fam", "proposal", "yolov", "fam_proposal", "logits", "logits_gated", "none"])
+    parser.add_argument("--fam_conf_boost", type=float, default=None)
+    parser.add_argument("--fam_spatial_sigma", type=float, default=None)
+    parser.add_argument("--proposal_topk", type=int, default=None)
+    parser.add_argument("--proposal_spatial_sigma", type=float, default=None)
+    parser.add_argument("--proposal_cls_sim_gain", type=float, default=None)
+    parser.add_argument("--proposal_reg_sim_gain", type=float, default=None)
+    parser.add_argument("--proposal_score_gain", type=float, default=None)
     return parser.parse_args()
 
 
@@ -106,6 +114,31 @@ def set_clip_layout(model, layout, all_keys=False, num_ref_frames=None):
                 module.num_ref_frames = int(num_ref_frames)
 
 
+def configure_temporal_options(model, args):
+    from ultralytics.nn.modules import Detect_VID
+
+    for module in model.modules():
+        if isinstance(module, Detect_VID):
+            if args.temporal_fusion is not None:
+                module.temporal_fusion = args.temporal_fusion
+            if args.fam_conf_boost is not None:
+                module.fam_conf_boost = float(args.fam_conf_boost)
+            if args.fam_spatial_sigma is not None:
+                for fam in getattr(module, "fams", []):
+                    fam.spatial_sigma = float(args.fam_spatial_sigma)
+            for refiner in getattr(module, "proposal_refiners", []):
+                if args.proposal_topk is not None:
+                    refiner.topk = int(args.proposal_topk)
+                if args.proposal_spatial_sigma is not None:
+                    refiner.spatial_sigma = float(args.proposal_spatial_sigma)
+                if args.proposal_cls_sim_gain is not None:
+                    refiner.cls_sim_gain = float(args.proposal_cls_sim_gain)
+                if args.proposal_reg_sim_gain is not None:
+                    refiner.reg_sim_gain = float(args.proposal_reg_sim_gain)
+                if args.proposal_score_gain is not None:
+                    refiner.score_gain = float(args.proposal_score_gain)
+
+
 def load_clip(frame_paths, imgsz, stride, return_all=False):
     from ultralytics.data.augment import LetterBox
 
@@ -167,6 +200,7 @@ def main():
     device = select_device(args.device)
     yolo = YOLO(str(args.weights))
     yolo.model.to(device).eval()
+    configure_temporal_options(yolo.model, args)
     stride = int(max(getattr(yolo.model, "stride", torch.tensor([32])).max().item(), 32))
     seq_root = resolve_sequence_root(args.source)
     seq_dirs = sorted(p for p in seq_root.iterdir() if p.is_dir())

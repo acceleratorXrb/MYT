@@ -135,6 +135,26 @@ def build_extra_eval_callback(opt):
                 )
                 if opt.extra_eval_window_inference:
                     export_cmd.extend(["--all_keys", "--window_size", opt.vid_window_size or opt.num_ref_frames + 1])
+                export_cmd.extend(
+                    [
+                        "--temporal_fusion",
+                        opt.temporal_fusion,
+                        "--fam_conf_boost",
+                        opt.fam_conf_boost,
+                        "--fam_spatial_sigma",
+                        opt.fam_spatial_sigma,
+                        "--proposal_topk",
+                        opt.proposal_topk,
+                        "--proposal_spatial_sigma",
+                        opt.proposal_spatial_sigma,
+                        "--proposal_cls_sim_gain",
+                        opt.proposal_cls_sim_gain,
+                        "--proposal_reg_sim_gain",
+                        opt.proposal_reg_sim_gain,
+                        "--proposal_score_gain",
+                        opt.proposal_score_gain,
+                    ]
+                )
             else:
                 export_cmd.extend(["--batch", opt.extra_eval_batch])
             steps.append(run_extra_eval_step("export_detections", export_cmd, strict))
@@ -193,6 +213,26 @@ def build_extra_eval_callback(opt):
                 )
                 if opt.extra_eval_window_inference:
                     track_cmd.extend(["--all_keys", "--window_size", opt.vid_window_size or opt.num_ref_frames + 1])
+                track_cmd.extend(
+                    [
+                        "--temporal_fusion",
+                        opt.temporal_fusion,
+                        "--fam_conf_boost",
+                        opt.fam_conf_boost,
+                        "--fam_spatial_sigma",
+                        opt.fam_spatial_sigma,
+                        "--proposal_topk",
+                        opt.proposal_topk,
+                        "--proposal_spatial_sigma",
+                        opt.proposal_spatial_sigma,
+                        "--proposal_cls_sim_gain",
+                        opt.proposal_cls_sim_gain,
+                        "--proposal_reg_sim_gain",
+                        opt.proposal_reg_sim_gain,
+                        "--proposal_score_gain",
+                        opt.proposal_score_gain,
+                    ]
+                )
             steps.append(run_extra_eval_step("export_tracks", track_cmd, strict))
             steps.append(
                 run_extra_eval_step(
