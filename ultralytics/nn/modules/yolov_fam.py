@@ -324,11 +324,17 @@ class ProposalTemporalRefiner(nn.Module):
         attn = torch.where(row_has_valid.unsqueeze(2), attn, torch.zeros_like(attn))
 
         weights = attn.softmax(dim=-1)
+        support_prob = torch.bmm(weights, r_prob)
         agg = torch.bmm(weights, self.v(r_tok))
         gate = torch.sigmoid(self.gate(torch.cat((q_tok, agg), dim=-1)))
         fused = q_tok + gate * (agg - q_tok)
 
-        delta = self.out(self.norm(fused)) * self.alpha.to(dtype=logits.dtype, device=logits.device)
+        learned_scale = torch.sigmoid(self.out(self.norm(fused)))
+        delta = (
+            learned_scale
+            * torch.relu(support_prob - q_prob)
+            * self.alpha.to(dtype=logits.dtype, device=logits.device)
+        )
         center_uncertain = 1.0 - vals.reshape(B, T * topk, 1).clamp(0.0, 1.0)
         delta = delta * center_uncertain
         delta = torch.where(row_has_valid.unsqueeze(-1), delta, torch.zeros_like(delta))
@@ -433,11 +439,17 @@ class ProposalTemporalRefiner(nn.Module):
 
         attn = attn.masked_fill(~safe_mask.unsqueeze(1), float("-inf"))
         weights = attn.softmax(dim=-1)
+        support_prob = torch.bmm(weights, ref_prob)
         agg = torch.bmm(weights, self.v(ref_tok))
         gate = torch.sigmoid(self.gate(torch.cat((key_tok, agg), dim=-1)))
         fused = key_tok + gate * (agg - key_tok)
 
-        delta = self.out(self.norm(fused)) * self.alpha.to(dtype=key_logits.dtype, device=key_logits.device)
+        learned_scale = torch.sigmoid(self.out(self.norm(fused)))
+        delta = (
+            learned_scale
+            * torch.relu(support_prob - key_prob)
+            * self.alpha.to(dtype=key_logits.dtype, device=key_logits.device)
+        )
         # Strong key predictions need less help; uncertain proposals get more temporal correction.
         center_uncertain = 1.0 - key_vals.unsqueeze(-1).clamp(0.0, 1.0)
         delta = delta * center_uncertain
