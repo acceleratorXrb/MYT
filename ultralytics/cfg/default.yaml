@@ -127,7 +127,7 @@ ref_sample: adjacent # (str) ref-frame sampling: adjacent | causal | uniform_loc
 vid_clip_mode: center # (str) VID training layout: center | window
 vid_window_size: 0 # (int) frames per window when vid_clip_mode=window; 0 defaults to num_ref_frames+1
 ref_aux_loss: 0.0 # (float) auxiliary detection loss weight for reference frames in VID clip training
-temporal_fusion: fam # (str) Detect_VID temporal fusion: fam | proposal | fam_proposal | logits | logits_gated | none
+temporal_fusion: fam # (str) Detect_VID temporal fusion: fam | proposal | yolov | fam_proposal | logits | logits_gated | none
 fam_conf_boost: 0.0 # (float) positive-only ref confidence boost gain for FAM mode
 fam_spatial_sigma: 0.2 # (float) normalized spatial sigma for local FAM attention; 0 disables
 proposal_topk: 150 # (int) top-K key/ref locations per scale for YOLOV-style proposal temporal refinement
@@ -136,6 +136,7 @@ proposal_cls_sim_gain: 0.5 # (float) class-probability similarity gain in propos
 proposal_reg_sim_gain: 0.25 # (float) box-distribution similarity gain in proposal temporal attention
 proposal_score_gain: 0.25 # (float) reference confidence bias gain in proposal temporal attention
 temporal_cls_consistency: 0.0 # (float) optional clip class-consistency loss gain
+yolov_cls_loss: 0.0 # (float) YOLOV-style proposal-refined classification auxiliary loss gain
 fam_warmup_epochs: 0.0 # (float) epochs to linearly warm Detect_VID temporal fusion alpha from 0 to target; 0 disables
 fam_alpha_target: 1.0 # (float) target temporal fusion alpha value at the end of warmup
 debug_clip_shape: False # (bool) print first training batch image shape and clip layout

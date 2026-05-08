@@ -130,7 +130,7 @@ class Detect_VID(Detect):
             for _ in ch
         )
         self.num_ref_frames = num_ref_frames
-        self.temporal_fusion = "fam"  # fam | proposal | fam_proposal | logits | logits_gated | none
+        self.temporal_fusion = "fam"  # fam | proposal | yolov | fam_proposal | logits | logits_gated | none
         self.fam_conf_boost = 0.0
         self.temporal_cls_consistency = 0.0
         self.debug_vid_head = False
@@ -138,6 +138,7 @@ class Detect_VID(Detect):
         self.clip_layout: tuple[int, int] | None = None  # (B, T); set by trainer
         self.clip_all_keys = False
         self.aux_outputs: list[torch.Tensor] | None = None  # ref-frame predictions for auxiliary loss
+        self.yolov_cls_outputs: list[torch.Tensor] | None = None  # proposal-refined cls logits for YOLOV-style aux loss
         self.temporal_consistency_losses: list[torch.Tensor] | None = None
         # streaming inference buffer (per detection level)
         self._stream_buffers: list[list[torch.Tensor]] | None = None
@@ -158,9 +159,9 @@ class Detect_VID(Detect):
 
     def _fusion_mode(self) -> str:
         mode = str(getattr(self, "temporal_fusion", "fam") or "fam").lower()
-        if mode not in {"fam", "proposal", "fam_proposal", "logits", "logits_gated", "none"}:
+        if mode not in {"fam", "proposal", "yolov", "fam_proposal", "logits", "logits_gated", "none"}:
             raise ValueError(
-                f"temporal_fusion must be fam|proposal|fam_proposal|logits|logits_gated|none, got {mode!r}"
+                f"temporal_fusion must be fam|proposal|yolov|fam_proposal|logits|logits_gated|none, got {mode!r}"
             )
         return mode
 
@@ -256,6 +257,13 @@ class Detect_VID(Detect):
                 cls_out = self.proposal_refiners[i](agg_pre, cls_out, ref_pre, ref_logits, key_reg, ref_reg)
         elif mode == "proposal":
             cls_out = self.proposal_refiners[i](key_pre, key_logits, ref_pre, ref_logits, key_reg, ref_reg)
+        elif mode == "yolov":
+            refined = self.proposal_refiners[i](key_pre, key_logits, ref_pre, ref_logits, key_reg, ref_reg)
+            if self.training and self.yolov_cls_outputs is not None:
+                self.yolov_cls_outputs.append(refined)
+                cls_out = key_logits
+            else:
+                cls_out = refined
         elif mode == "logits":
             cls_out = self._logits_fuse(i, key_logits, ref_logits)
         elif mode == "logits_gated":
@@ -290,19 +298,24 @@ class Detect_VID(Detect):
             num_refs = min(int(getattr(self, "num_ref_frames", T - 1)), max(T - 1, 0))
             ref_debug = []
             mode = self._fusion_mode()
-            if mode == "proposal":
+            if mode in {"proposal", "yolov"}:
                 for key_pos in range(min(T, 5)):
                     ref_debug.append((key_pos, self._window_ref_indices(key_pos, T, num_refs)))
                 frame_mask = self._window_ref_mask(T, num_refs, pre_full.device)
-                cls_all = self.proposal_refiners[i].forward_window(pre_clip, cls_clip, reg_clip, frame_mask).reshape(
-                    B * T, self.nc, H, W
-                )
+                refined_cls = self.proposal_refiners[i].forward_window(pre_clip, cls_clip, reg_clip, frame_mask)
+                if mode == "yolov" and self.training:
+                    if self.yolov_cls_outputs is not None:
+                        self.yolov_cls_outputs.append(refined_cls.reshape(B * T, self.nc, H, W))
+                    cls_all = cls_clip.reshape(B * T, self.nc, H, W)
+                else:
+                    cls_all = refined_cls.reshape(B * T, self.nc, H, W)
                 out = torch.cat((reg_full, cls_all), 1)
                 if bool(getattr(self, "debug_vid_head", False)) and self._debug_vid_head_printed < 6:
                     print(
                         "[debug-vid-head] "
                         f"mode=window level={i} B={B} T={T} clip_all_keys={self.clip_all_keys} "
                         f"num_ref_frames={self.num_ref_frames} fusion={mode} proposal_vectorized=True "
+                        f"yolov_aux={mode == 'yolov' and self.training} "
                         f"proposal_topk={getattr(self.proposal_refiners[i], 'topk', None)} ref_debug={ref_debug} "
                         f"pre_shape={tuple(pre_full.shape)} reg_shape={tuple(reg_full.shape)} "
                         f"out_shape={tuple(out.shape)} aux=None",
@@ -408,6 +421,13 @@ class Detect_VID(Detect):
                 cls_out = self.proposal_refiners[i](agg_pre, cls_out, ref_pre, ref_logits, reg_full, None)
         elif mode == "proposal":
             cls_out = self.proposal_refiners[i](pre_full, self._cv3_cls(i, pre_full), ref_pre, ref_logits, reg_full, None)
+        elif mode == "yolov":
+            refined = self.proposal_refiners[i](pre_full, self._cv3_cls(i, pre_full), ref_pre, ref_logits, reg_full, None)
+            if self.training and self.yolov_cls_outputs is not None:
+                self.yolov_cls_outputs.append(refined)
+                cls_out = self._cv3_cls(i, pre_full)
+            else:
+                cls_out = refined
         elif mode == "logits":
             cls_out = self._logits_fuse(i, self._cv3_cls(i, pre_full), ref_logits)
         elif mode == "logits_gated":
@@ -424,6 +444,7 @@ class Detect_VID(Detect):
     def forward(self, x):
         """Detect_VID forward: clip-mode if clip_layout set, else streaming."""
         self.aux_outputs = None
+        self.yolov_cls_outputs = [] if self.training and self._fusion_mode() == "yolov" else None
         self.temporal_consistency_losses = [] if self.training else None
         if self.clip_layout is not None:
             B, T = self.clip_layout

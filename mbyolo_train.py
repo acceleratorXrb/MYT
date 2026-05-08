@@ -413,7 +413,7 @@ def parse_opt():
     parser.add_argument('--vid_clip_mode', default='center', choices=['center', 'window'], help='VID training clip layout: center repeats refs; window uses each frame once inside a temporal window')
     parser.add_argument('--vid_window_size', type=int, default=None, help='frames per window when --vid_clip_mode window; defaults to num_ref_frames+1')
     parser.add_argument('--ref_aux_loss', type=float, default=0.0, help='auxiliary detection loss weight for reference frames')
-    parser.add_argument('--temporal_fusion', default='fam', choices=['fam', 'proposal', 'fam_proposal', 'logits', 'logits_gated', 'none'], help='Detect_VID temporal fusion mode')
+    parser.add_argument('--temporal_fusion', default='fam', choices=['fam', 'proposal', 'yolov', 'fam_proposal', 'logits', 'logits_gated', 'none'], help='Detect_VID temporal fusion mode')
     parser.add_argument('--fam_conf_boost', type=float, default=0.0, help='positive-only ref confidence boost gain for FAM mode')
     parser.add_argument('--fam_spatial_sigma', type=float, default=0.2, help='normalized spatial sigma for local FAM attention; 0 disables')
     parser.add_argument('--proposal_topk', type=int, default=150, help='top-K key/ref locations per scale for YOLOV-style proposal temporal refinement')
@@ -422,6 +422,7 @@ def parse_opt():
     parser.add_argument('--proposal_reg_sim_gain', type=float, default=0.25, help='box-distribution similarity gain in proposal temporal attention')
     parser.add_argument('--proposal_score_gain', type=float, default=0.25, help='reference confidence bias gain in proposal temporal attention')
     parser.add_argument('--temporal_cls_consistency', type=float, default=0.0, help='optional clip class-consistency loss gain')
+    parser.add_argument('--yolov_cls_loss', type=float, default=0.0, help='YOLOV-style proposal-refined classification auxiliary loss gain')
     parser.add_argument('--fam_warmup_epochs', type=float, default=0.0, help='linearly warm temporal fusion alpha for this many epochs; 0 disables')
     parser.add_argument('--fam_alpha_target', type=float, default=1.0, help='target temporal fusion alpha value at the end of warmup')
     parser.add_argument('--debug_clip_shape', action='store_true', help='print the first training batch image shape and clip layout')
@@ -478,6 +479,7 @@ if __name__ == '__main__':
         "proposal_reg_sim_gain": opt.proposal_reg_sim_gain,
         "proposal_score_gain": opt.proposal_score_gain,
         "temporal_cls_consistency": opt.temporal_cls_consistency,
+        "yolov_cls_loss": opt.yolov_cls_loss,
         "fam_warmup_epochs": opt.fam_warmup_epochs,
         "fam_alpha_target": opt.fam_alpha_target,
         "debug_clip_shape": opt.debug_clip_shape,
