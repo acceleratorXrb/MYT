@@ -102,12 +102,18 @@ class DetectionTrainer(BaseTrainer):
                 proposal_cls_gain = float(getattr(self.args, "proposal_cls_sim_gain", 0.5) or 0.0)
                 proposal_reg_gain = float(getattr(self.args, "proposal_reg_sim_gain", 0.25) or 0.0)
                 proposal_score_gain = float(getattr(self.args, "proposal_score_gain", 0.25) or 0.0)
+                proposal_vote_gain = float(getattr(self.args, "proposal_vote_gain", 0.0) or 0.0)
+                proposal_recall_gain = float(getattr(self.args, "proposal_recall_gain", 0.0) or 0.0)
+                proposal_recall_radius = int(getattr(self.args, "proposal_recall_radius", 1) or 0)
                 for refiner in getattr(head, "proposal_refiners", []):
                     refiner.topk = proposal_topk
                     refiner.spatial_sigma = proposal_sigma
                     refiner.cls_sim_gain = proposal_cls_gain
                     refiner.reg_sim_gain = proposal_reg_gain
                     refiner.score_gain = proposal_score_gain
+                    refiner.vote_gain = proposal_vote_gain
+                    refiner.recall_gain = proposal_recall_gain
+                    refiner.recall_radius = proposal_recall_radius
         if getattr(self.args, "debug_clip_shape", False) and not getattr(self, "_debug_clip_shape_printed", False):
             clip_layout = batch.get("clip_layout")
             if hasattr(clip_layout, "detach"):

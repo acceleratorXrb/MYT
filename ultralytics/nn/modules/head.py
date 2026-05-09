@@ -124,7 +124,7 @@ class Detect_VID(Detect):
             ProposalTemporalRefiner(
                 cls_channels=c3,
                 nc=nc,
-                topk=min(int(topk), 150),
+                topk=int(topk),
                 conf_thr=conf_thr,
             )
             for _ in ch
@@ -317,6 +317,8 @@ class Detect_VID(Detect):
                         f"num_ref_frames={self.num_ref_frames} fusion={mode} proposal_vectorized=True "
                         f"yolov_aux={mode == 'yolov' and self.training} "
                         f"proposal_topk={getattr(self.proposal_refiners[i], 'topk', None)} ref_debug={ref_debug} "
+                        f"vote={getattr(self.proposal_refiners[i], 'vote_gain', None)} "
+                        f"recall={getattr(self.proposal_refiners[i], 'recall_gain', None)} "
                         f"pre_shape={tuple(pre_full.shape)} reg_shape={tuple(reg_full.shape)} "
                         f"out_shape={tuple(out.shape)} aux=None",
                         flush=True,
@@ -350,6 +352,8 @@ class Detect_VID(Detect):
                     f"mode=window level={i} B={B} T={T} clip_all_keys={self.clip_all_keys} "
                     f"num_ref_frames={self.num_ref_frames} fusion={self._fusion_mode()} "
                     f"proposal_topk={getattr(self.proposal_refiners[i], 'topk', None)} ref_debug={ref_debug} "
+                    f"vote={getattr(self.proposal_refiners[i], 'vote_gain', None)} "
+                    f"recall={getattr(self.proposal_refiners[i], 'recall_gain', None)} "
                     f"pre_shape={tuple(pre_full.shape)} reg_shape={tuple(reg_full.shape)} "
                     f"out_shape={tuple(out.shape)} aux=None",
                     flush=True,
@@ -372,6 +376,8 @@ class Detect_VID(Detect):
                 f"mode=center level={i} B={B} T={T} clip_all_keys={self.clip_all_keys} "
                 f"num_ref_frames={self.num_ref_frames} fusion={self._fusion_mode()} "
                 f"proposal_topk={getattr(self.proposal_refiners[i], 'topk', None)} ref_count={ref_pre.shape[1]} "
+                f"vote={getattr(self.proposal_refiners[i], 'vote_gain', None)} "
+                f"recall={getattr(self.proposal_refiners[i], 'recall_gain', None)} "
                 f"pre_shape={tuple(pre_full.shape)} reg_key_shape={tuple(reg_key.shape)} "
                 f"out_shape={tuple(key_out.shape)}",
                 flush=True,

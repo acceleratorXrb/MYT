@@ -135,6 +135,9 @@ proposal_spatial_sigma: 0.05 # (float) normalized spatial sigma for proposal tem
 proposal_cls_sim_gain: 0.5 # (float) class-probability similarity gain in proposal temporal attention
 proposal_reg_sim_gain: 0.25 # (float) box-distribution similarity gain in proposal temporal attention
 proposal_score_gain: 0.25 # (float) reference confidence bias gain in proposal temporal attention
+proposal_vote_gain: 0.0 # (float) direct temporal class-vote boost gain for proposal refinement
+proposal_recall_gain: 0.0 # (float) neighboring-frame support gain for adding low-current-score proposal candidates
+proposal_recall_radius: 1 # (int) feature-cell max-pool radius for temporal recall proposal support
 temporal_cls_consistency: 0.0 # (float) optional clip class-consistency loss gain
 yolov_cls_loss: 0.0 # (float) YOLOV-style proposal-refined classification auxiliary loss gain
 fam_warmup_epochs: 0.0 # (float) epochs to linearly warm Detect_VID temporal fusion alpha from 0 to target; 0 disables

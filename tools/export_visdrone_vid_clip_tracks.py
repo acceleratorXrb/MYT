@@ -55,6 +55,9 @@ def parse_args():
     parser.add_argument("--proposal_cls_sim_gain", type=float, default=None)
     parser.add_argument("--proposal_reg_sim_gain", type=float, default=None)
     parser.add_argument("--proposal_score_gain", type=float, default=None)
+    parser.add_argument("--proposal_vote_gain", type=float, default=None)
+    parser.add_argument("--proposal_recall_gain", type=float, default=None)
+    parser.add_argument("--proposal_recall_radius", type=int, default=None)
     return parser.parse_args()
 
 

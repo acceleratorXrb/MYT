@@ -188,6 +188,9 @@ class ProposalTemporalRefiner(nn.Module):
         cls_sim_gain: float = 0.5,
         reg_sim_gain: float = 0.25,
         score_gain: float = 0.25,
+        vote_gain: float = 0.0,
+        recall_gain: float = 0.0,
+        recall_radius: int = 1,
     ):
         super().__init__()
         self.cls_channels = cls_channels
@@ -198,6 +201,9 @@ class ProposalTemporalRefiner(nn.Module):
         self.cls_sim_gain = cls_sim_gain
         self.reg_sim_gain = reg_sim_gain
         self.score_gain = score_gain
+        self.vote_gain = vote_gain
+        self.recall_gain = recall_gain
+        self.recall_radius = recall_radius
 
         self.alpha = nn.Parameter(torch.tensor(0.0))
         self.q = nn.Linear(cls_channels, cls_channels, bias=False)
@@ -230,6 +236,39 @@ class ProposalTemporalRefiner(nn.Module):
         k = max(1, min(int(k), score.shape[1]))
         return score.topk(k, dim=1)
 
+    def _candidate_scores(
+        self,
+        score: torch.Tensor,
+        frame_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Blend current-frame scores with local temporal support before top-k.
+
+        This lets weak current-frame locations enter the proposal set when
+        neighboring frames repeatedly support the same spatial neighborhood.
+        """
+        recall_gain = float(getattr(self, "recall_gain", 0.0) or 0.0)
+        B, T, H, W = score.shape
+        if recall_gain <= 0.0 or T <= 1:
+            return score
+
+        if frame_mask is None:
+            frame_mask = ~torch.eye(T, device=score.device, dtype=torch.bool)
+        else:
+            frame_mask = frame_mask.to(device=score.device, dtype=torch.bool)
+
+        support = []
+        fallback = score.max(dim=1).values
+        for q in range(T):
+            refs = torch.where(frame_mask[q])[0]
+            support_q = score[:, refs].max(dim=1).values if refs.numel() else fallback
+            radius = max(0, int(getattr(self, "recall_radius", 1) or 0))
+            if radius > 0:
+                k = 2 * radius + 1
+                support_q = F.max_pool2d(support_q.unsqueeze(1), kernel_size=k, stride=1, padding=radius).squeeze(1)
+            support.append(support_q)
+        support_score = torch.stack(support, dim=1)
+        return torch.maximum(score, recall_gain * support_score)
+
     @staticmethod
     def _gather_window_tokens(x: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
         """Gather `(B, T, K, C)` tokens from `(B, T, C, H, W)` by spatial indices `(B, T, K)`."""
@@ -243,6 +282,52 @@ class ProposalTemporalRefiner(nn.Module):
         B, T, C, _, _ = x.shape
         flat = x.flatten(3).permute(0, 1, 3, 2)  # (B, T, HW, C)
         return flat.gather(2, idx.unsqueeze(-1).expand(B, T, idx.shape[2], C))
+
+    @staticmethod
+    def _grid_yx(idx: torch.Tensor, H: int, W: int, dtype: torch.dtype) -> torch.Tensor:
+        y = (idx // W).to(dtype=dtype) / max(H - 1, 1)
+        x = (idx % W).to(dtype=dtype) / max(W - 1, 1)
+        return torch.stack((y, x), dim=-1)
+
+    @staticmethod
+    def _proposal_centers_window(reg: torch.Tensor | None, idx: torch.Tensor, H: int, W: int) -> torch.Tensor:
+        """Approximate decoded proposal centers in normalized feature coordinates.
+
+        YOLOv8 predicts distance distributions from each grid point. For temporal
+        attention, using the decoded center is closer to proposal-level fusion
+        than comparing only raw grid indices.
+        """
+        dtype = reg.dtype if reg is not None else torch.float32
+        if reg is None:
+            return ProposalTemporalRefiner._grid_yx(idx, H, W, dtype)
+        B, T, Cr, _, _ = reg.shape
+        reg_max = max(1, Cr // 4)
+        proj = torch.arange(reg_max, device=reg.device, dtype=reg.dtype)
+        dist = (reg.view(B, T, 4, reg_max, H, W).softmax(3) * proj.view(1, 1, 1, reg_max, 1, 1)).sum(3)
+        dist_tok = ProposalTemporalRefiner._gather_window_logits(dist, idx)  # (B, T, K, 4)
+        grid_yx = ProposalTemporalRefiner._grid_yx(idx, H, W, reg.dtype)
+        grid_y, grid_x = grid_yx[..., 0], grid_yx[..., 1]
+        l, t, r, b = dist_tok.unbind(-1)
+        center_x = (grid_x * max(W - 1, 1) + (r - l) * 0.5) / max(W - 1, 1)
+        center_y = (grid_y * max(H - 1, 1) + (b - t) * 0.5) / max(H - 1, 1)
+        return torch.stack((center_y.clamp(0, 1), center_x.clamp(0, 1)), dim=-1)
+
+    @staticmethod
+    def _proposal_centers(reg: torch.Tensor | None, idx: torch.Tensor, H: int, W: int) -> torch.Tensor:
+        dtype = reg.dtype if reg is not None else torch.float32
+        if reg is None:
+            return ProposalTemporalRefiner._grid_yx(idx, H, W, dtype)
+        B, Cr, _, _ = reg.shape
+        reg_max = max(1, Cr // 4)
+        proj = torch.arange(reg_max, device=reg.device, dtype=reg.dtype)
+        dist = (reg.view(B, 4, reg_max, H, W).softmax(2) * proj.view(1, 1, reg_max, 1, 1)).sum(2)
+        dist_tok = ProposalTemporalRefiner._gather_logits(dist, idx)  # (B, K, 4)
+        grid_yx = ProposalTemporalRefiner._grid_yx(idx, H, W, reg.dtype)
+        grid_y, grid_x = grid_yx[..., 0], grid_yx[..., 1]
+        l, t, r, b = dist_tok.unbind(-1)
+        center_x = (grid_x * max(W - 1, 1) + (r - l) * 0.5) / max(W - 1, 1)
+        center_y = (grid_y * max(H - 1, 1) + (b - t) * 0.5) / max(H - 1, 1)
+        return torch.stack((center_y.clamp(0, 1), center_x.clamp(0, 1)), dim=-1)
 
     def forward_window(
         self,
@@ -269,8 +354,14 @@ class ProposalTemporalRefiner(nn.Module):
 
         HW = H * W
         topk = max(1, min(int(getattr(self, "topk", 150) or 1), HW))
-        score = logits.sigmoid().amax(dim=2).flatten(2)  # (B, T, HW)
-        vals, idx = score.topk(topk, dim=2)              # (B, T, K)
+        score_map = logits.sigmoid().amax(dim=2)  # (B, T, H, W)
+        if frame_mask is None:
+            frame_mask = ~torch.eye(T, device=feat.device, dtype=torch.bool)
+        else:
+            frame_mask = frame_mask.to(device=feat.device, dtype=torch.bool)
+        candidate_score = self._candidate_scores(score_map, frame_mask).flatten(2)
+        vals, idx = candidate_score.topk(topk, dim=2)       # (B, T, K)
+        current_vals = score_map.flatten(2).gather(2, idx)  # (B, T, K)
         valid_mask = vals.reshape(B, T * topk) > float(getattr(self, "conf_thr", 0.001) or 0.0)
         valid_any = valid_mask.any(dim=1)
         if not valid_any.any():
@@ -302,20 +393,14 @@ class ProposalTemporalRefiner(nn.Module):
 
         spatial_sigma = float(getattr(self, "spatial_sigma", 0.05) or 0.0)
         if spatial_sigma > 0:
-            flat_idx = idx.reshape(B, T * topk)
-            y = (flat_idx // W).to(dtype=feat.dtype) / max(H - 1, 1)
-            x = (flat_idx % W).to(dtype=feat.dtype) / max(W - 1, 1)
-            dist2 = (y.unsqueeze(2) - y.unsqueeze(1)).pow(2) + (x.unsqueeze(2) - x.unsqueeze(1)).pow(2)
+            centers = self._proposal_centers_window(reg, idx, H, W).reshape(B, T * topk, 2)
+            dist2 = (centers.unsqueeze(2) - centers.unsqueeze(1)).pow(2).sum(dim=-1)
             attn = attn - dist2 / (2.0 * max(spatial_sigma ** 2, 1e-6))
 
         score_gain = float(getattr(self, "score_gain", 0.25) or 0.0)
         if score_gain > 0:
             attn = attn + score_gain * torch.log(vals.reshape(B, T * topk).clamp_min(1e-6)).unsqueeze(1)
 
-        if frame_mask is None:
-            frame_mask = ~torch.eye(T, device=feat.device, dtype=torch.bool)
-        else:
-            frame_mask = frame_mask.to(device=feat.device, dtype=torch.bool)
         token_mask = frame_mask.repeat_interleave(topk, dim=0).repeat_interleave(topk, dim=1)  # (T*K, T*K)
         safe_mask = safe_mask & token_mask.any(dim=0).view(1, -1)
         attn = attn.masked_fill(~token_mask.view(1, T * topk, T * topk), float("-inf"))
@@ -335,7 +420,12 @@ class ProposalTemporalRefiner(nn.Module):
             * torch.relu(support_prob - q_prob)
             * self.alpha.to(dtype=logits.dtype, device=logits.device)
         )
-        center_uncertain = 1.0 - vals.reshape(B, T * topk, 1).clamp(0.0, 1.0)
+        vote_gain = float(getattr(self, "vote_gain", 0.0) or 0.0)
+        if vote_gain > 0:
+            delta = delta + vote_gain * torch.relu(support_prob - q_prob) * self.alpha.to(
+                dtype=logits.dtype, device=logits.device
+            )
+        center_uncertain = 1.0 - current_vals.reshape(B, T * topk, 1).clamp(0.0, 1.0)
         delta = delta * center_uncertain
         delta = torch.where(row_has_valid.unsqueeze(-1), delta, torch.zeros_like(delta))
         delta = torch.where(valid_any.view(B, 1, 1), delta, torch.zeros_like(delta))
@@ -423,14 +513,15 @@ class ProposalTemporalRefiner(nn.Module):
 
         spatial_sigma = float(getattr(self, "spatial_sigma", 0.05) or 0.0)
         if spatial_sigma > 0:
-            key_y = (key_idx // W).to(dtype=key_feat.dtype) / max(H - 1, 1)
-            key_x = (key_idx % W).to(dtype=key_feat.dtype) / max(W - 1, 1)
+            key_yx = self._proposal_centers(key_reg, key_idx, H, W)
             ref_spatial = ref_spatial_idx.reshape(B, R * per_ref_k)
-            ref_y = (ref_spatial // W).to(dtype=key_feat.dtype) / max(H - 1, 1)
-            ref_x = (ref_spatial % W).to(dtype=key_feat.dtype) / max(W - 1, 1)
-            dist2 = (key_y.unsqueeze(2) - ref_y.unsqueeze(1)).pow(2) + (
-                key_x.unsqueeze(2) - ref_x.unsqueeze(1)
-            ).pow(2)
+            ref_yx = self._proposal_centers(
+                ref_reg.reshape(B * R, ref_reg.shape[2], H, W) if ref_reg is not None else None,
+                ref_spatial.reshape(B * R, per_ref_k),
+                H,
+                W,
+            ).reshape(B, R * per_ref_k, 2)
+            dist2 = (key_yx.unsqueeze(2) - ref_yx.unsqueeze(1)).pow(2).sum(dim=-1)
             attn = attn - dist2 / (2.0 * max(spatial_sigma ** 2, 1e-6))
 
         score_gain = float(getattr(self, "score_gain", 0.25) or 0.0)
@@ -450,6 +541,11 @@ class ProposalTemporalRefiner(nn.Module):
             * torch.relu(support_prob - key_prob)
             * self.alpha.to(dtype=key_logits.dtype, device=key_logits.device)
         )
+        vote_gain = float(getattr(self, "vote_gain", 0.0) or 0.0)
+        if vote_gain > 0:
+            delta = delta + vote_gain * torch.relu(support_prob - key_prob) * self.alpha.to(
+                dtype=key_logits.dtype, device=key_logits.device
+            )
         # Strong key predictions need less help; uncertain proposals get more temporal correction.
         center_uncertain = 1.0 - key_vals.unsqueeze(-1).clamp(0.0, 1.0)
         delta = delta * center_uncertain
@@ -464,7 +560,8 @@ class ProposalTemporalRefiner(nn.Module):
         return (
             f"C={self.cls_channels}, nc={self.nc}, topk={self.topk}, conf_thr={self.conf_thr}, "
             f"spatial_sigma={self.spatial_sigma}, cls_sim={self.cls_sim_gain}, "
-            f"reg_sim={self.reg_sim_gain}, score={self.score_gain}"
+            f"reg_sim={self.reg_sim_gain}, score={self.score_gain}, vote={self.vote_gain}, "
+            f"recall={self.recall_gain}, recall_radius={self.recall_radius}"
         )
 
 
