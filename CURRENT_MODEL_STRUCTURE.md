@@ -1,0 +1,132 @@
+# Current Model Structure Marker
+
+This file marks the model structure currently used as the main VID experiment
+configuration in this repository.
+
+Last updated: 2026-05-09
+
+## Model Name
+
+**Mamba-YOLO-T-VID with YOLOV-style proposal temporal classification refinement**
+
+Short name used in notes:
+
+```text
+Mamba-YOLO-T-VID-YOLOV-Proposal
+```
+
+## Fixed Backbone and Neck
+
+The backbone and neck are kept from the Mamba-YOLO-T detection model:
+
+```text
+Input video window
+  -> frame-wise Mamba-YOLO-T backbone
+  -> Mamba-YOLO neck / feature pyramid
+  -> P3, P4, P5 multi-scale features
+```
+
+The backbone/neck do not perform explicit temporal fusion. Frames in a video
+window are flattened into a normal image batch, so each frame passes through the
+backbone and neck once.
+
+## Current Detection Head Structure
+
+The current main detection head is:
+
+```text
+Detect_VID Head
+  - Reg branch: cv2 -> bbox distribution
+  - Cls branch: cv3_pre -> class logits
+  - YOLOV-style ProposalTemporalRefiner
+      - top-k proposal selection
+      - proposal-center spatial matching
+      - temporal class voting
+      - temporal recall boost
+  - Output: original bbox regression + refined class logits
+```
+
+The frame-local bbox regression is kept unchanged. Temporal information is used
+mainly to refine class logits and improve video consistency.
+
+## Current Main Structural Hyperparameters
+
+These hyperparameters define the current main structure:
+
+```bash
+--vid_clip_mode window
+--vid_window_size 16
+--num_ref_frames 15
+--temporal_fusion yolov
+--ref_aux_loss 0.0
+--yolov_cls_loss 0.30
+--proposal_topk 700
+--proposal_spatial_sigma 0.12
+--proposal_cls_sim_gain 0.55
+--proposal_reg_sim_gain 0.0
+--proposal_score_gain 0.0
+--proposal_vote_gain 0.50
+--proposal_recall_gain 1.25
+--proposal_recall_radius 1
+--fam_warmup_epochs 3
+--fam_alpha_target 0.45
+```
+
+## What These Options Mean
+
+`vid_clip_mode=window` means the model uses a consecutive video window, and all
+frames in the window are treated as key frames.
+
+`temporal_fusion=yolov` selects the current YOLOV-style proposal temporal
+refinement path. During training, the original detection output is supervised by
+the normal YOLO losses, while the proposal-refined class logits receive an
+additional auxiliary classification loss. During inference and extra evaluation,
+the refined class logits are used as the final class prediction.
+
+`proposal_topk` controls how many proposal locations are selected per scale and
+per frame.
+
+`proposal_spatial_sigma` controls how local cross-frame proposal matching should
+be. Smaller values enforce stronger spatial locality.
+
+`proposal_vote_gain` enables temporal class voting. Nearby proposals in adjacent
+frames can strengthen the current proposal's class logits.
+
+`proposal_recall_gain` and `proposal_recall_radius` allow neighboring-frame
+support to pull low-current-confidence locations into the proposal candidate
+set, which is intended to improve recall.
+
+## Other Supported Head Modes
+
+The code also supports other `Detect_VID` modes, but they are not the current
+main model structure:
+
+```text
+none          -> single-frame Detect-like head
+fam           -> dense feature aggregation module
+proposal      -> proposal-level class refinement used directly
+yolov         -> current main YOLOV-style proposal auxiliary/refined head
+fam_proposal  -> dense FAM followed by proposal refinement
+logits        -> direct average logits fusion
+logits_gated  -> confidence-gated logits fusion
+```
+
+For thesis figures and main experiment descriptions, use the `yolov` structure
+above unless a section explicitly describes an ablation.
+
+## Current Training Command Identity
+
+The current model structure corresponds to commands that include:
+
+```bash
+--vid_clip_mode window \
+--vid_window_size 16 \
+--num_ref_frames 15 \
+--temporal_fusion yolov \
+--proposal_vote_gain 0.50 \
+--proposal_recall_gain 1.25 \
+--proposal_recall_radius 1
+```
+
+If these options are changed, the model head structure or behavior should be
+treated as a different experimental variant.
