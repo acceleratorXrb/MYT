@@ -191,6 +191,10 @@ class ProposalTemporalRefiner(nn.Module):
         vote_gain: float = 0.0,
         recall_gain: float = 0.0,
         recall_radius: int = 1,
+        after_topk: int = 0,
+        nms_radius: int = 0,
+        time_sigma: float = 0.0,
+        loc_gain: float = 0.0,
     ):
         super().__init__()
         self.cls_channels = cls_channels
@@ -204,6 +208,10 @@ class ProposalTemporalRefiner(nn.Module):
         self.vote_gain = vote_gain
         self.recall_gain = recall_gain
         self.recall_radius = recall_radius
+        self.after_topk = after_topk
+        self.nms_radius = nms_radius
+        self.time_sigma = time_sigma
+        self.loc_gain = loc_gain
 
         self.alpha = nn.Parameter(torch.tensor(0.0))
         self.q = nn.Linear(cls_channels, cls_channels, bias=False)
@@ -212,10 +220,25 @@ class ProposalTemporalRefiner(nn.Module):
         self.gate = nn.Linear(cls_channels * 2, 1)
         self.norm = nn.LayerNorm(cls_channels)
         self.out = nn.Linear(cls_channels, nc)
+        # YOLOV aggregates proposal features and classifies the fused
+        # [support, key] token. This branch keeps that idea while only adding a
+        # positive class-logit correction to preserve current-frame boxes.
+        self.concat_norm = nn.LayerNorm(cls_channels * 2)
+        self.concat_out = nn.Linear(cls_channels * 2, nc)
+        # Lightweight learned geometry bias, analogous to YOLOV's loc embedding.
+        self.loc_mlp = nn.Sequential(
+            nn.Linear(4, max(16, cls_channels // 4)),
+            nn.ReLU(inplace=True),
+            nn.Linear(max(16, cls_channels // 4), 1),
+        )
 
         nn.init.zeros_(self.gate.bias)
         nn.init.xavier_uniform_(self.out.weight, gain=0.01)
         nn.init.zeros_(self.out.bias)
+        nn.init.xavier_uniform_(self.concat_out.weight, gain=0.01)
+        nn.init.zeros_(self.concat_out.bias)
+        nn.init.zeros_(self.loc_mlp[-1].weight)
+        nn.init.zeros_(self.loc_mlp[-1].bias)
 
     @staticmethod
     def _gather_tokens(x: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
@@ -232,7 +255,10 @@ class ProposalTemporalRefiner(nn.Module):
         return flat.gather(1, idx.unsqueeze(-1).expand(B, idx.shape[1], C))
 
     def _topk_positions(self, logits: torch.Tensor, k: int) -> tuple[torch.Tensor, torch.Tensor]:
-        score = logits.sigmoid().amax(dim=1).flatten(1)  # (B, HW)
+        score_map = logits.sigmoid().amax(dim=1)  # (B, H, W)
+        if int(getattr(self, "nms_radius", 0) or 0) > 0:
+            score_map = self._local_nms_scores(score_map.unsqueeze(1)).squeeze(1)
+        score = score_map.flatten(1)  # (B, HW)
         k = max(1, min(int(k), score.shape[1]))
         return score.topk(k, dim=1)
 
@@ -268,6 +294,35 @@ class ProposalTemporalRefiner(nn.Module):
             support.append(support_q)
         support_score = torch.stack(support, dim=1)
         return torch.maximum(score, recall_gain * support_score)
+
+    def _local_nms_scores(self, score: torch.Tensor) -> torch.Tensor:
+        """Keep only local score maxima before proposal top-k selection."""
+        radius = int(getattr(self, "nms_radius", 0) or 0)
+        if radius <= 0:
+            return score
+        B, T, H, W = score.shape
+        k = 2 * radius + 1
+        pooled = F.max_pool2d(score.reshape(B * T, 1, H, W), kernel_size=k, stride=1, padding=radius)
+        keep = score.reshape(B * T, 1, H, W) >= (pooled - 1e-12)
+        filtered = score.reshape(B * T, 1, H, W).masked_fill(~keep, -1.0)
+        return filtered.view(B, T, H, W)
+
+    def _proposal_k(self, HW: int) -> tuple[int, int]:
+        """Return pre-selection K and attention K for YOLOV-style two-stage proposals."""
+        pre_k = max(1, min(int(getattr(self, "topk", 150) or 1), HW))
+        after_k = int(getattr(self, "after_topk", 0) or 0)
+        if after_k <= 0:
+            return pre_k, pre_k
+        return pre_k, max(1, min(after_k, pre_k))
+
+    def _relative_loc_bias(self, key_yx: torch.Tensor, ref_yx: torch.Tensor) -> torch.Tensor:
+        """Learned local geometry bias from normalized proposal centers."""
+        gain = float(getattr(self, "loc_gain", 0.0) or 0.0)
+        if gain <= 0.0:
+            return key_yx.new_zeros((*key_yx.shape[:-1], ref_yx.shape[-2]))
+        rel = ref_yx.unsqueeze(-3) - key_yx.unsqueeze(-2)
+        geom = torch.cat((rel, rel.abs()), dim=-1)
+        return gain * self.loc_mlp(geom).squeeze(-1)
 
     @staticmethod
     def _gather_window_tokens(x: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
@@ -353,14 +408,17 @@ class ProposalTemporalRefiner(nn.Module):
             return logits
 
         HW = H * W
-        topk = max(1, min(int(getattr(self, "topk", 150) or 1), HW))
+        pre_topk, topk = self._proposal_k(HW)
         score_map = logits.sigmoid().amax(dim=2)  # (B, T, H, W)
         if frame_mask is None:
             frame_mask = ~torch.eye(T, device=feat.device, dtype=torch.bool)
         else:
             frame_mask = frame_mask.to(device=feat.device, dtype=torch.bool)
-        candidate_score = self._candidate_scores(score_map, frame_mask).flatten(2)
-        vals, idx = candidate_score.topk(topk, dim=2)       # (B, T, K)
+        candidate_score = self._local_nms_scores(self._candidate_scores(score_map, frame_mask)).flatten(2)
+        vals, idx = candidate_score.topk(pre_topk, dim=2)       # (B, T, pre-K)
+        if topk < pre_topk:
+            vals = vals[:, :, :topk]
+            idx = idx[:, :, :topk]
         current_vals = score_map.flatten(2).gather(2, idx)  # (B, T, K)
         valid_mask = vals.reshape(B, T * topk) > float(getattr(self, "conf_thr", 0.001) or 0.0)
         valid_any = valid_mask.any(dim=1)
@@ -392,10 +450,22 @@ class ProposalTemporalRefiner(nn.Module):
             attn = attn + reg_gain * reg_sim
 
         spatial_sigma = float(getattr(self, "spatial_sigma", 0.05) or 0.0)
+        centers = None
         if spatial_sigma > 0:
             centers = self._proposal_centers_window(reg, idx, H, W).reshape(B, T * topk, 2)
             dist2 = (centers.unsqueeze(2) - centers.unsqueeze(1)).pow(2).sum(dim=-1)
             attn = attn - dist2 / (2.0 * max(spatial_sigma ** 2, 1e-6))
+        loc_gain = float(getattr(self, "loc_gain", 0.0) or 0.0)
+        if loc_gain > 0:
+            if centers is None:
+                centers = self._proposal_centers_window(reg, idx, H, W).reshape(B, T * topk, 2)
+            attn = attn + self._relative_loc_bias(centers, centers)
+
+        time_sigma = float(getattr(self, "time_sigma", 0.0) or 0.0)
+        if time_sigma > 0:
+            frame_ids = torch.arange(T, device=feat.device, dtype=feat.dtype).repeat_interleave(topk)
+            time_dist2 = (frame_ids.view(1, -1, 1) - frame_ids.view(1, 1, -1)).pow(2)
+            attn = attn - time_dist2 / (2.0 * max(time_sigma ** 2, 1e-6))
 
         score_gain = float(getattr(self, "score_gain", 0.25) or 0.0)
         if score_gain > 0:
@@ -414,7 +484,8 @@ class ProposalTemporalRefiner(nn.Module):
         gate = torch.sigmoid(self.gate(torch.cat((q_tok, agg), dim=-1)))
         fused = q_tok + gate * (agg - q_tok)
 
-        learned_scale = torch.sigmoid(self.out(self.norm(fused)))
+        concat_feat = torch.cat((agg, q_tok), dim=-1)
+        learned_scale = torch.sigmoid(self.out(self.norm(fused)) + self.concat_out(self.concat_norm(concat_feat)))
         delta = (
             learned_scale
             * torch.relu(support_prob - q_prob)
@@ -468,10 +539,17 @@ class ProposalTemporalRefiner(nn.Module):
                     align_corners=False,
                 ).view(B, R, ref_reg.shape[2], H, W)
 
-        topk = max(1, int(getattr(self, "topk", 150) or 1))
-        key_vals, key_idx = self._topk_positions(key_logits, topk)
+        HW = H * W
+        pre_topk, topk = self._proposal_k(HW)
+        key_vals, key_idx = self._topk_positions(key_logits, pre_topk)
+        if topk < pre_topk:
+            key_vals = key_vals[:, :topk]
+            key_idx = key_idx[:, :topk]
         per_ref_k = max(1, min(H * W, topk // max(R, 1)))
-        ref_score = ref_logits.sigmoid().amax(dim=2).reshape(B, R, H * W)
+        ref_score_map = ref_logits.sigmoid().amax(dim=2)
+        if int(getattr(self, "nms_radius", 0) or 0) > 0:
+            ref_score_map = self._local_nms_scores(ref_score_map)
+        ref_score = ref_score_map.reshape(B, R, H * W)
         ref_vals, ref_spatial_idx = ref_score.topk(per_ref_k, dim=2)  # (B, R, K)
         ref_offsets = torch.arange(R, device=ref_logits.device).view(1, R, 1) * (H * W)
         ref_idx = (ref_spatial_idx + ref_offsets).reshape(B, R * per_ref_k)
@@ -512,6 +590,8 @@ class ProposalTemporalRefiner(nn.Module):
             attn = attn + reg_gain * reg_sim
 
         spatial_sigma = float(getattr(self, "spatial_sigma", 0.05) or 0.0)
+        key_yx = None
+        ref_yx = None
         if spatial_sigma > 0:
             key_yx = self._proposal_centers(key_reg, key_idx, H, W)
             ref_spatial = ref_spatial_idx.reshape(B, R * per_ref_k)
@@ -523,6 +603,19 @@ class ProposalTemporalRefiner(nn.Module):
             ).reshape(B, R * per_ref_k, 2)
             dist2 = (key_yx.unsqueeze(2) - ref_yx.unsqueeze(1)).pow(2).sum(dim=-1)
             attn = attn - dist2 / (2.0 * max(spatial_sigma ** 2, 1e-6))
+        loc_gain = float(getattr(self, "loc_gain", 0.0) or 0.0)
+        if loc_gain > 0:
+            if key_yx is None:
+                key_yx = self._proposal_centers(key_reg, key_idx, H, W)
+            if ref_yx is None:
+                ref_spatial = ref_spatial_idx.reshape(B, R * per_ref_k)
+                ref_yx = self._proposal_centers(
+                    ref_reg.reshape(B * R, ref_reg.shape[2], H, W) if ref_reg is not None else None,
+                    ref_spatial.reshape(B * R, per_ref_k),
+                    H,
+                    W,
+                ).reshape(B, R * per_ref_k, 2)
+            attn = attn + self._relative_loc_bias(key_yx, ref_yx)
 
         score_gain = float(getattr(self, "score_gain", 0.25) or 0.0)
         if score_gain > 0:
@@ -535,7 +628,8 @@ class ProposalTemporalRefiner(nn.Module):
         gate = torch.sigmoid(self.gate(torch.cat((key_tok, agg), dim=-1)))
         fused = key_tok + gate * (agg - key_tok)
 
-        learned_scale = torch.sigmoid(self.out(self.norm(fused)))
+        concat_feat = torch.cat((agg, key_tok), dim=-1)
+        learned_scale = torch.sigmoid(self.out(self.norm(fused)) + self.concat_out(self.concat_norm(concat_feat)))
         delta = (
             learned_scale
             * torch.relu(support_prob - key_prob)
@@ -559,9 +653,11 @@ class ProposalTemporalRefiner(nn.Module):
     def extra_repr(self) -> str:
         return (
             f"C={self.cls_channels}, nc={self.nc}, topk={self.topk}, conf_thr={self.conf_thr}, "
+            f"after_topk={self.after_topk}, nms_radius={self.nms_radius}, "
             f"spatial_sigma={self.spatial_sigma}, cls_sim={self.cls_sim_gain}, "
             f"reg_sim={self.reg_sim_gain}, score={self.score_gain}, vote={self.vote_gain}, "
-            f"recall={self.recall_gain}, recall_radius={self.recall_radius}"
+            f"recall={self.recall_gain}, recall_radius={self.recall_radius}, "
+            f"time_sigma={self.time_sigma}, loc_gain={self.loc_gain}"
         )
 
 

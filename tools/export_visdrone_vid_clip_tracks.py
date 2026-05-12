@@ -58,6 +58,10 @@ def parse_args():
     parser.add_argument("--proposal_vote_gain", type=float, default=None)
     parser.add_argument("--proposal_recall_gain", type=float, default=None)
     parser.add_argument("--proposal_recall_radius", type=int, default=None)
+    parser.add_argument("--proposal_after_topk", type=int, default=None)
+    parser.add_argument("--proposal_nms_radius", type=int, default=None)
+    parser.add_argument("--proposal_time_sigma", type=float, default=None)
+    parser.add_argument("--proposal_loc_gain", type=float, default=None)
     return parser.parse_args()
 
 

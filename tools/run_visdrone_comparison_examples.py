@@ -50,6 +50,10 @@ def parse_args():
     p.add_argument("--proposal-vote-gain", type=float, default=0.50)
     p.add_argument("--proposal-recall-gain", type=float, default=1.25)
     p.add_argument("--proposal-recall-radius", type=int, default=1)
+    p.add_argument("--proposal-after-topk", type=int, default=220)
+    p.add_argument("--proposal-nms-radius", type=int, default=1)
+    p.add_argument("--proposal-time-sigma", type=float, default=4.0)
+    p.add_argument("--proposal-loc-gain", type=float, default=0.5)
     return p.parse_args()
 
 
@@ -141,6 +145,14 @@ def main():
                 args.proposal_recall_gain,
                 "--proposal_recall_radius",
                 args.proposal_recall_radius,
+                "--proposal_after_topk",
+                args.proposal_after_topk,
+                "--proposal_nms_radius",
+                args.proposal_nms_radius,
+                "--proposal_time_sigma",
+                args.proposal_time_sigma,
+                "--proposal_loc_gain",
+                args.proposal_loc_gain,
             ],
             env,
         )

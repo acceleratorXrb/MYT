@@ -138,6 +138,10 @@ proposal_score_gain: 0.25 # (float) reference confidence bias gain in proposal t
 proposal_vote_gain: 0.0 # (float) direct temporal class-vote boost gain for proposal refinement
 proposal_recall_gain: 0.0 # (float) neighboring-frame support gain for adding low-current-score proposal candidates
 proposal_recall_radius: 1 # (int) feature-cell max-pool radius for temporal recall proposal support
+proposal_after_topk: 0 # (int) second-stage proposal count after proposal_topk; 0 keeps proposal_topk
+proposal_nms_radius: 0 # (int) local feature-cell NMS radius before proposal top-K; 0 disables
+proposal_time_sigma: 0.0 # (float) temporal Gaussian sigma for proposal attention; 0 disables
+proposal_loc_gain: 0.0 # (float) learned proposal-location attention bias gain; 0 disables
 temporal_cls_consistency: 0.0 # (float) optional clip class-consistency loss gain
 yolov_cls_loss: 0.0 # (float) YOLOV-style proposal-refined classification auxiliary loss gain
 fam_warmup_epochs: 0.0 # (float) epochs to linearly warm Detect_VID temporal fusion alpha from 0 to target; 0 disables

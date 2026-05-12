@@ -159,6 +159,14 @@ def build_extra_eval_callback(opt):
                         opt.proposal_recall_gain,
                         "--proposal_recall_radius",
                         opt.proposal_recall_radius,
+                        "--proposal_after_topk",
+                        opt.proposal_after_topk,
+                        "--proposal_nms_radius",
+                        opt.proposal_nms_radius,
+                        "--proposal_time_sigma",
+                        opt.proposal_time_sigma,
+                        "--proposal_loc_gain",
+                        opt.proposal_loc_gain,
                     ]
                 )
             else:
@@ -243,6 +251,14 @@ def build_extra_eval_callback(opt):
                         opt.proposal_recall_gain,
                         "--proposal_recall_radius",
                         opt.proposal_recall_radius,
+                        "--proposal_after_topk",
+                        opt.proposal_after_topk,
+                        "--proposal_nms_radius",
+                        opt.proposal_nms_radius,
+                        "--proposal_time_sigma",
+                        opt.proposal_time_sigma,
+                        "--proposal_loc_gain",
+                        opt.proposal_loc_gain,
                     ]
                 )
             steps.append(run_extra_eval_step("export_tracks", track_cmd, strict))
@@ -312,6 +328,10 @@ def set_detect_vid_temporal_fusion(
     proposal_vote_gain=None,
     proposal_recall_gain=None,
     proposal_recall_radius=None,
+    proposal_after_topk=None,
+    proposal_nms_radius=None,
+    proposal_time_sigma=None,
+    proposal_loc_gain=None,
 ):
     """Set Detect_VID temporal fusion options on a YOLO wrapper or raw model."""
     try:
@@ -353,6 +373,14 @@ def set_detect_vid_temporal_fusion(
                         refiner.recall_gain = float(proposal_recall_gain)
                     if proposal_recall_radius is not None:
                         refiner.recall_radius = int(proposal_recall_radius)
+                    if proposal_after_topk is not None:
+                        refiner.after_topk = int(proposal_after_topk)
+                    if proposal_nms_radius is not None:
+                        refiner.nms_radius = int(proposal_nms_radius)
+                    if proposal_time_sigma is not None:
+                        refiner.time_sigma = float(proposal_time_sigma)
+                    if proposal_loc_gain is not None:
+                        refiner.loc_gain = float(proposal_loc_gain)
                 count += 1
     return count
 
@@ -485,6 +513,10 @@ def parse_opt():
     parser.add_argument('--proposal_vote_gain', type=float, default=0.0, help='direct temporal class-vote boost gain for proposal refinement')
     parser.add_argument('--proposal_recall_gain', type=float, default=0.0, help='use neighboring-frame support to add low-current-score proposal candidates')
     parser.add_argument('--proposal_recall_radius', type=int, default=1, help='feature-cell max-pool radius for temporal recall proposal support')
+    parser.add_argument('--proposal_after_topk', type=int, default=0, help='second-stage proposal count after pre top-K; 0 keeps proposal_topk')
+    parser.add_argument('--proposal_nms_radius', type=int, default=0, help='local feature-cell NMS radius before proposal top-K; 0 disables')
+    parser.add_argument('--proposal_time_sigma', type=float, default=0.0, help='temporal Gaussian sigma for proposal attention; 0 disables')
+    parser.add_argument('--proposal_loc_gain', type=float, default=0.0, help='learned proposal-location attention bias gain; 0 disables')
     parser.add_argument('--temporal_cls_consistency', type=float, default=0.0, help='optional clip class-consistency loss gain')
     parser.add_argument('--yolov_cls_loss', type=float, default=0.0, help='YOLOV-style proposal-refined classification auxiliary loss gain')
     parser.add_argument('--fam_warmup_epochs', type=float, default=0.0, help='linearly warm temporal fusion alpha for this many epochs; 0 disables')
@@ -545,6 +577,10 @@ if __name__ == '__main__':
         "proposal_vote_gain": opt.proposal_vote_gain,
         "proposal_recall_gain": opt.proposal_recall_gain,
         "proposal_recall_radius": opt.proposal_recall_radius,
+        "proposal_after_topk": opt.proposal_after_topk,
+        "proposal_nms_radius": opt.proposal_nms_radius,
+        "proposal_time_sigma": opt.proposal_time_sigma,
+        "proposal_loc_gain": opt.proposal_loc_gain,
         "temporal_cls_consistency": opt.temporal_cls_consistency,
         "yolov_cls_loss": opt.yolov_cls_loss,
         "fam_warmup_epochs": opt.fam_warmup_epochs,
@@ -586,6 +622,10 @@ if __name__ == '__main__':
         opt.proposal_vote_gain,
         opt.proposal_recall_gain,
         opt.proposal_recall_radius,
+        opt.proposal_after_topk,
+        opt.proposal_nms_radius,
+        opt.proposal_time_sigma,
+        opt.proposal_loc_gain,
     )
     if task == "train":
         if opt.init_weights:
@@ -606,6 +646,10 @@ if __name__ == '__main__':
                 opt.proposal_vote_gain,
                 opt.proposal_recall_gain,
                 opt.proposal_recall_radius,
+                opt.proposal_after_topk,
+                opt.proposal_nms_radius,
+                opt.proposal_time_sigma,
+                opt.proposal_loc_gain,
             )
         if opt.fam_warmup_epochs > 0:
             model.add_callback("on_train_epoch_start", build_fam_warmup_callback(opt))

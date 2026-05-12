@@ -41,6 +41,10 @@ def parse_args():
     parser.add_argument("--proposal_vote_gain", type=float, default=None)
     parser.add_argument("--proposal_recall_gain", type=float, default=None)
     parser.add_argument("--proposal_recall_radius", type=int, default=None)
+    parser.add_argument("--proposal_after_topk", type=int, default=None)
+    parser.add_argument("--proposal_nms_radius", type=int, default=None)
+    parser.add_argument("--proposal_time_sigma", type=float, default=None)
+    parser.add_argument("--proposal_loc_gain", type=float, default=None)
     return parser.parse_args()
 
 
@@ -146,6 +150,14 @@ def configure_temporal_options(model, args):
                     refiner.recall_gain = float(args.proposal_recall_gain)
                 if args.proposal_recall_radius is not None:
                     refiner.recall_radius = int(args.proposal_recall_radius)
+                if args.proposal_after_topk is not None:
+                    refiner.after_topk = int(args.proposal_after_topk)
+                if args.proposal_nms_radius is not None:
+                    refiner.nms_radius = int(args.proposal_nms_radius)
+                if args.proposal_time_sigma is not None:
+                    refiner.time_sigma = float(args.proposal_time_sigma)
+                if args.proposal_loc_gain is not None:
+                    refiner.loc_gain = float(args.proposal_loc_gain)
 
 
 def load_clip(frame_paths, imgsz, stride, return_all=False):

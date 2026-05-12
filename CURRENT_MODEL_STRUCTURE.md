@@ -3,16 +3,16 @@
 This file marks the model structure currently used as the main VID experiment
 configuration in this repository.
 
-Last updated: 2026-05-09
+Last updated: 2026-05-12
 
 ## Model Name
 
-**Mamba-YOLO-T-VID with YOLOV-style proposal temporal classification refinement**
+**Mamba-YOLO-T-VID with YOLOV-style two-stage proposal temporal refinement**
 
 Short name used in notes:
 
 ```text
-Mamba-YOLO-T-VID-YOLOV-Proposal
+Mamba-YOLO-T-VID-YOLOV-Proposal-v2
 ```
 
 ## Fixed Backbone and Neck
@@ -39,8 +39,12 @@ Detect_VID Head
   - Reg branch: cv2 -> bbox distribution
   - Cls branch: cv3_pre -> class logits
   - YOLOV-style ProposalTemporalRefiner
-      - top-k proposal selection
-      - proposal-center spatial matching
+      - pre top-k proposal selection
+      - local proposal NMS
+      - second-stage proposal subset for temporal attention
+      - proposal-center spatial matching plus learned location bias
+      - temporal-distance attention bias
+      - YOLOV-style [support, key] proposal classification refine
       - temporal class voting
       - temporal recall boost
   - Output: original bbox regression + refined class logits
@@ -61,7 +65,11 @@ These hyperparameters define the current main structure:
 --ref_aux_loss 0.0
 --yolov_cls_loss 0.30
 --proposal_topk 700
+--proposal_after_topk 220
+--proposal_nms_radius 1
 --proposal_spatial_sigma 0.12
+--proposal_time_sigma 4.0
+--proposal_loc_gain 0.5
 --proposal_cls_sim_gain 0.55
 --proposal_reg_sim_gain 0.0
 --proposal_score_gain 0.0
@@ -83,11 +91,23 @@ the normal YOLO losses, while the proposal-refined class logits receive an
 additional auxiliary classification loss. During inference and extra evaluation,
 the refined class logits are used as the final class prediction.
 
-`proposal_topk` controls how many proposal locations are selected per scale and
-per frame.
+`proposal_topk` is now the pre-selection proposal count per scale and per
+frame. `proposal_after_topk` controls how many of those candidates enter the
+cross-frame temporal attention. This follows YOLOV's spirit of selecting a
+larger proposal set first, then aggregating a smaller high-quality proposal
+list.
+
+`proposal_nms_radius` applies local feature-cell suppression before the top-k
+selection, reducing repeated low-value neighboring grid points in dense scenes.
 
 `proposal_spatial_sigma` controls how local cross-frame proposal matching should
 be. Smaller values enforce stronger spatial locality.
+
+`proposal_time_sigma` biases attention toward nearer frames in the 16-frame
+window, while still allowing useful support from farther frames.
+
+`proposal_loc_gain` enables a small learned proposal-location attention bias,
+similar in purpose to YOLOV's location embedding.
 
 `proposal_vote_gain` enables temporal class voting. Nearby proposals in adjacent
 frames can strengthen the current proposal's class logits.
@@ -123,6 +143,10 @@ The current model structure corresponds to commands that include:
 --vid_window_size 16 \
 --num_ref_frames 15 \
 --temporal_fusion yolov \
+--proposal_after_topk 220 \
+--proposal_nms_radius 1 \
+--proposal_time_sigma 4.0 \
+--proposal_loc_gain 0.5 \
 --proposal_vote_gain 0.50 \
 --proposal_recall_gain 1.25 \
 --proposal_recall_radius 1
