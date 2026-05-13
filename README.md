@@ -1,111 +1,196 @@
-#毕业设计要求
+# Mamba-YOLO-T-VID for VisDrone Video Detection
 
-主要研究内容
-第一，设计时空混合架构，将YOLO的CNN骨干与Mamba模块深度融合，CNN提取空间局部特征，Mamba处理时序连续帧间的长程依赖，捕捉小目标的运动轨迹与上下文关联。第二，开发自适应扫描机制，针对无人机俯拍视角中目标分布稀疏的特点，让Mamba动态调整扫描路径，聚焦潜在目标区域，提升计算效率。第三，构建多尺度状态传递网络，在特征金字塔（FPN）中嵌入轻量化Mamba单元，增强不同尺度特征间的信息融合，专门优化极小目标的特征表示。第四，建立完整的评估体系，在VisDrone、UAVDT等无人机数据集上，从检测精度（特别是小目标AP）、时序一致性、推理速度等多维度验证模型效能，并进行详实的模块消融实验。
+本仓库基于官方 Mamba-YOLO 和 Ultralytics YOLOv8，面向 VisDrone-VID
+无人机视频目标检测任务做视频化改造。当前主线要求是：
 
-目标和要求
-一、理论基础：深入理解状态空间模型（SSM）的选择性扫描机制、YOLO架构及视频目标检测特性；二、实验规范：采用固定随机种子，在相同硬件环境下进行3次重复实验取均值，与SOTA方法公平对比；三、分析深度：必须进行模块消融实验与可视化分析（如Mamba状态热力图），阐明性能增益来源；四、工程实现：提供完整训练/推理代码、详细配置文件及模型权重，确保可复现性；五、创新性：在混合架构设计、时序特征融合或扫描策略上体现明确创新点。
+- 保持官方 Mamba-YOLO-T 的 backbone 和 neck，不破坏其中的 ODSS/VSS/XSS 结构。
+- 将视频输入、检测头、时序 proposal 融合、离线视频评估流程逐步向 YOLOV 靠齐。
+- 同时评估单帧检测指标、分类 flicker、一致性、MOT/ID 等视频指标。
 
-特色
-第一，场景强驱动：摒弃通用检测框架的宽泛优化，精准锚定“无人机视频流”与“小目标”两大核心约束，使研究问题尖锐，技术设计有的放矢。第二，时空双优架构：创新性地将擅长局部感知的CNN与擅长长序列建模的Mamba有机融合，构建“空间提取-时序推理”双支路协同的混合骨干网络，同时提升单帧识别精度与帧间关联一致性。第三，动态稀疏感知：充分利用无人机视频背景相对静止、目标稀疏的特点，设计自适应的选择性扫描机制，让模型计算资源智能聚焦于运动区域，实现精度与效率的平衡。第四，端到端可部署：整个研究以实际部署为导向，模型设计兼顾精度与速度，提供从训练、验证到轻量化部署（如TensorRT）的完整技术链，确保研究成果不仅停留在论文，更具备落地应用的生命力。
+当前主模型记录在 `CURRENT_MODEL_STRUCTURE.md`，历史模型版本记录在
+`model_variants/`。
 
-成果价值
-学术上，首次将Mamba架构系统性地应用于无人机视频目标检测领域，探索了状态空间模型处理视觉时序信号的潜力，为“CNN+SSM”这一新兴架构范式提供了重要的实证案例与性能基准。其提出的自适应扫描与多尺度状态传递机制，可为视频理解、长序列分析等研究方向提供新思路。工程上，直接针对无人机巡检、安防监控、智慧交通等现实场景中“小、快、密”目标检测的痛点，提供精度更高、时序更稳的解决方案。所开发的模型与优化策略，能有效提升现有无人机视觉系统的自动化水平，具有明确的产业转化前景。生态上，开源高质量的代码、训练配置与模型权重，能推动无人机视觉与高效架构研究社区的发展，促进相关技术的快速迭代与落地。
-CUDA_VISIBLE_DEVICES=0 codex --auto-edit
+## 当前主模型
 
-# [AAAI2025] Mamba YOLO: A Simple Baseline for Object Detection with State Space Model
+当前主模型为：
 
-![Python 3.11](https://img.shields.io/badge/python-3.11-g) ![pytorch 2.3.0](https://img.shields.io/badge/pytorch-2.3.0-blue.svg) [![docs](https://img.shields.io/badge/docs-latest-blue)](README.md)
+```text
+Mamba-YOLO-T-VID-YOLOV-Proposal-v2
+```
 
+整体结构：
 
-<div align="center">
-  <img src="./asserts/mambayolo.jpg" width="1200px"/>
-</div>
+```text
+16-frame video window
+  -> official Mamba-YOLO-T backbone
+  -> official Mamba-YOLO-T neck / feature pyramid
+  -> P3/P4/P5 features
+  -> Detect_VID
+      - YOLOv8-style bbox regression branch
+      - raw classification branch
+      - YOLOV-style two-stage ProposalTemporalRefiner
+      - refined class logits
+  -> offline VID detections / flicker / MOT-ID metrics
+```
 
-## Model Zoo
-
-We've pre-trained YOLO-World-T/M/L from scratch and evaluate on the `MSCOCO2017 val`. 
-
-### Inference on MSCOCO2017 dataset
-
-
-| model | Params| FLOPs | ${AP}^{val}$ | ${AP}_{{50}}^{val}$ | ${AP}_{{75}}^{val}$ | ${AP}_{{S}}^{val}$ | ${AP}_{{M}}^{val}$ | ${AP}_{{L}}^{val}$ |
-| :------------------------------------------------------------------------------------------------------------------- | :------------------- | :----------------- | :--------------: | :------------: | :------------: | :------------: | :-------------: | :------------: |
-| [Mamba YOLO-T](./ultralytics/cfg/models/mamba-yolo/Mamba-YOLO-T.yaml) | 5.8M | 13.2G |       44.5       |          61.2           |          48.2           |          24.7          |          48.8          |          62.0          |
-| [Mamba YOLO-M](./ultralytics/cfg/models/mamba-yolo/Mamba-YOLO-B.yaml) | 19.1M | 45.4G  |       49.1       |          66.5           |          53.5           |          30.6          |          54.0          |          66.4          |
-| [Mamba YOLO-L](./ultralytics/cfg/models/mamba-yolo/Mamba-YOLO-L.yaml)  | 57.6M | 156.2G |       52.1       |          69.8           |          56.5           |          34.1          |          57.3          |          68.1          |
-
-
-
-
-## Getting started
-
-### 1. Installation
-
-Mamba YOLO is developed based on `torch==2.3.0` `pytorch-cuda==12.1` and `CUDA Version==12.6`. 
-
-#### 2.Clone Project 
+最新记录的模型版本：
 
 ```bash
-git clone https://github.com/HZAI-ZJNU/Mamba-YOLO.git
+python tools/model_variant.py list
+python tools/model_variant.py show yolov_proposal_v2_2026-05-13
+python tools/model_variant.py train-command yolov_proposal_v2_2026-05-13
 ```
 
-#### 3.Create and activate a conda environment.
-```bash
-conda create -n mambayolo -y python=3.11
-conda activate mambayolo
-```
+## 快速训练
 
-#### 4. Install torch
+服务器上推荐从项目目录运行：
 
 ```bash
-pip3 install torch===2.3.0 torchvision torchaudio
+cd /root/autodl-tmp/MYT
+source .venv/bin/activate
+git pull
+
+python tools/model_variant.py train-command yolov_proposal_v2_2026-05-13 \
+  --name yolov_proposal_v2
 ```
 
-#### 5. Install Dependencies
+如果需要直接执行完整命令，可以从上面的 `train-command` 输出复制运行。
+
+## 重要文件说明
+
+### 项目入口
+
+| 文件 | 作用 |
+| --- | --- |
+| `mbyolo_train.py` | 训练、验证、预测、导出的统一入口。新增了 VID window 输入、时序融合参数、额外视频指标评估回调。 |
+| `setup.sh` | 服务器环境准备脚本，安装系统依赖、Python 虚拟环境依赖、VisDrone 官方工具等。 |
+| `RUN_VISDRONE_VID.md` | VisDrone-VID 数据准备、训练、额外评估的运行说明。 |
+| `RUN_VISDRONE_VID_YOLOV.md` | 当前 YOLOV-style 视频模型相关运行说明。 |
+| `CURRENT_MODEL_STRUCTURE.md` | 当前主实验模型结构标记文件，用于论文描述和实验复现。 |
+| `MODEL_HISTORY.md` | 历史模型版本索引，记录每个阶段模型对应的 YAML 文件。 |
+
+### 模型与配置
+
+| 路径 | 作用 |
+| --- | --- |
+| `ultralytics/cfg/models/mamba-yolo/` | Mamba-YOLO 模型 YAML。当前 VID 主模型使用 `Mamba-YOLO-T-VID.yaml`。 |
+| `ultralytics/cfg/datasets/VisDrone-VID.yaml` | VisDrone-VID 数据集配置。 |
+| `ultralytics/cfg/default.yaml` | Ultralytics 默认训练参数，已加入 VID 和 proposal temporal fusion 参数。 |
+| `ultralytics/nn/modules/head.py` | 检测头定义。`Detect_VID` 在这里实现，是当前视频模型的核心入口。 |
+| `ultralytics/nn/modules/yolov_fam.py` | 视频时序融合模块，包括 FAM 和 YOLOV-style `ProposalTemporalRefiner`。 |
+| `ultralytics/models/yolo/detect/train.py` | 训练时把 VID clip layout、时序融合参数传入 `Detect_VID`。 |
+| `ultralytics/utils/loss.py` | YOLO 检测损失和 VID 辅助损失，包括 YOLOV-style refined cls auxiliary loss。 |
+
+### 模型版本记录
+
+| 路径 | 作用 |
+| --- | --- |
+| `model_variants/README.md` | 模型版本记录目录说明。 |
+| `model_variants/yolov_proposal_v2_2026-05-13.yaml` | 当前主模型的完整记录：结构、关键超参、指标、训练命令。 |
+| `tools/model_variant.py` | 模型版本管理小工具，可列出版本、查看 YAML、打印训练命令。 |
+
+后续每次出现重要结构改动时，应该新增一个 `model_variants/*.yaml`，不要覆盖旧版本。
+
+### VisDrone 数据工具
+
+| 文件 | 作用 |
+| --- | --- |
+| `tools/download_visdrone_vid_zips.py` | 下载 VisDrone-VID 数据压缩包。 |
+| `tools/prepare_visdrone_vid_yolo.py` | 将 VisDrone-VID 转成 YOLO/VID 训练所需目录与标签格式。 |
+| `tools/verify_visdrone_vid_source.py` | 检查原始 VisDrone-VID 数据目录是否完整。 |
+| `tools/check_visdrone_vid_runtime.py` | 检查训练和评估所需数据、路径、依赖是否可用。 |
+
+### 检测结果导出
+
+| 文件 | 作用 |
+| --- | --- |
+| `tools/export_visdrone_vid_results.py` | 单帧检测导出，适合 baseline Mamba-YOLO 或 YOLOv8。 |
+| `tools/export_visdrone_vid_clip_results.py` | 离线 clip/window 检测导出，适合当前 VID 新模型。 |
+| `tools/export_visdrone_vid_tracks.py` | 单帧检测 + ByteTrack 的轨迹导出。 |
+| `tools/export_visdrone_vid_clip_tracks.py` | 离线 clip/window 检测 + ByteTrack 的轨迹导出，当前 MOT/ID 推荐使用这个。 |
+| `tools/temporal_state.py` | 视频序列切换时重置模型时序状态的辅助工具。 |
+
+### 指标评估
+
+| 文件 | 作用 |
+| --- | --- |
+| `tools/eval_visdrone_vid_cls_flicker.py` | 计算分类抖动指标，包括 `macro_flicker` 和 `micro_flicker`。 |
+| `tools/eval_visdrone_vid_mot.py` | 计算当前自实现 MOT/ID 指标，包括 IDF1、IDP、IDR、ID Switches、Frag。 |
+| `tools/eval_visdrone_vid_official.py` | VisDrone 官方 AP/AR 工具封装，当前周期评估默认不跑官方 AP/AR。 |
+| `tools/run_visdrone_vid_official_eval.py` | 手动运行官方 VisDrone VID 评估流程。 |
+
+### 可视化对比工具
+
+| 文件 | 作用 |
+| --- | --- |
+| `tools/run_visdrone_comparison_examples.py` | 一键导出 baseline 和新模型结果，并筛选新模型更优的可视化图片。 |
+| `tools/select_visdrone_comparison_examples.py` | 根据 GT、baseline、新模型预测结果自动挑选论文展示样例。 |
+| `asserts/` | 存放论文或 README 用图片，包括模型结构图、检测头流程图、ODSSBlock 示意图等。 |
+
+## 当前主模型关键参数
+
 ```bash
-pip install seaborn thop timm einops
-cd selective_scan && pip install . && cd ..
-pip install -v -e .
+--vid_clip_mode window
+--vid_window_size 16
+--num_ref_frames 15
+--temporal_fusion yolov
+--yolov_cls_loss 0.30
+--proposal_topk 700
+--proposal_after_topk 220
+--proposal_nms_radius 1
+--proposal_spatial_sigma 0.12
+--proposal_time_sigma 4.0
+--proposal_loc_gain 0.5
+--proposal_cls_sim_gain 0.55
+--proposal_vote_gain 0.50
+--proposal_recall_gain 1.25
+--proposal_recall_radius 1
 ```
 
-#### 6. Prepare MSCOCO2017 Dataset
-Make sure your dataset structure as follows:
-```
-├── coco
-│   ├── annotations
-│   │   ├── instances_train2017.json
-│   │   └── instances_val2017.json
-│   ├── images
-│   │   ├── train2017
-│   │   └── val2017
-│   ├── labels
-│   │   ├── train2017
-│   │   ├── val2017
-```
+这些参数共同定义当前 `Mamba-YOLO-T-VID-YOLOV-Proposal-v2`。如果这些参数明显变化，应视为新的实验变体，并新增一个 `model_variants/*.yaml` 记录。
 
-#### 7. Training Mamba-YOLO-T
+## 环境与依赖
+
+推荐在服务器上执行：
+
 ```bash
-python mbyolo_train.py --task train --data ultralytics/cfg/datasets/coco.yaml \
- --config ultralytics/cfg/models/mamba-yolo/Mamba-YOLO-T.yaml \
---amp  --project ./output_dir/mscoco --name mambayolo_n
+bash setup.sh
+source .venv/bin/activate
 ```
+
+如果出现 `No module named cv2`，通常是当前 shell 没进入 `.venv`，或者虚拟环境依赖没有安装完整。
+
+## 论文实验建议
+
+推荐至少保留以下对比：
+
+- 官方 Mamba-YOLO-T baseline：单帧模型。
+- 官方 YOLOv8 baseline：单帧 YOLOv8。
+- 当前新模型：Mamba-YOLO-T backbone/neck + YOLOV-style video head。
+- Ablation：关闭 `proposal_vote_gain`、关闭 `proposal_recall_gain`、关闭 `proposal_after_topk/nms/time/loc` 等。
+
+当前新模型的主要优势是更高 IDP、更少 ID Switches、更少 Frag；主要短板仍是 IDR 和召回。
 
 ## Acknowledgement
 
-This repo is modified from open source real-time object detection codebase [Ultralytics](https://github.com/ultralytics/ultralytics). The selective-scan from [VMamba](https://github.com/MzeroMiko/VMamba).
+This repository is based on:
 
-## Citations
-If you find [Mamba-YOLO](https://github.com/HZAI-ZJNU/Mamba-YOLO) is useful in your research or applications, please consider giving us a star 🌟 and citing it.
+- [Mamba-YOLO](https://github.com/HZAI-ZJNU/Mamba-YOLO)
+- [Ultralytics YOLO](https://github.com/ultralytics/ultralytics)
+- [YOLOV](https://github.com/YuHengsss/YOLOV)
+- [VMamba selective scan](https://github.com/MzeroMiko/VMamba)
+
+## Citation
 
 ```bibtex
 @misc{wang2024mambayolossmsbasedyolo,
-      title={Mamba YOLO: SSMs-Based YOLO For Object Detection}, 
+      title={Mamba YOLO: SSMs-Based YOLO For Object Detection},
       author={Zeyu Wang and Chen Li and Huiying Xu and Xinzhong Zhu},
       year={2024},
       eprint={2406.05835},
       archivePrefix={arXiv},
       primaryClass={cs.CV},
-      url={https://arxiv.org/abs/2406.05835}, 
+      url={https://arxiv.org/abs/2406.05835},
 }
 ```
+
