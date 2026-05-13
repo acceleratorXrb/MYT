@@ -1,0 +1,205 @@
+id: yolov_proposal_v2_2026-05-13
+date: "2026-05-13"
+name: Mamba-YOLO-T-VID-YOLOV-Proposal-v2
+status: current_main
+
+constraint:
+  keep_backbone: official Mamba-YOLO-T
+  keep_neck: official Mamba-YOLO-T neck / feature pyramid
+  editable_parts:
+    - VID input window organization
+    - Detect_VID head
+    - temporal proposal refinement
+    - auxiliary losses
+    - offline video evaluation path
+
+architecture:
+  input: 16-frame VID window
+  backbone_neck_flow:
+    - flatten window frames into an image batch
+    - run each frame through Mamba-YOLO-T backbone once
+    - run each frame through Mamba-YOLO neck once
+    - produce P3/P4/P5 features for each frame
+  head:
+    name: Detect_VID
+    regression: YOLOv8/Mamba-YOLO current-frame bbox distribution branch
+    classification:
+      - cv3_pre class features
+      - raw class logits
+      - YOLOV-style ProposalTemporalRefiner
+      - refined class logits
+    temporal_refiner:
+      - pre top-k proposal candidate selection
+      - local proposal NMS
+      - second-stage proposal subset for cross-frame attention
+      - proposal-center spatial matching
+      - learned proposal-location attention bias
+      - temporal-distance attention bias
+      - YOLOV-style support/key proposal classification refinement
+      - temporal class voting
+      - temporal recall boost
+  output: current-frame bbox regression plus refined class logits
+
+main_hyperparameters:
+  vid_clip_mode: window
+  vid_window_size: 16
+  num_ref_frames: 15
+  clip_stride: 1
+  ref_sample: adjacent
+  temporal_fusion: yolov
+  ref_aux_loss: 0.0
+  yolov_cls_loss: 0.30
+  proposal_topk: 700
+  proposal_after_topk: 220
+  proposal_nms_radius: 1
+  proposal_spatial_sigma: 0.12
+  proposal_time_sigma: 4.0
+  proposal_loc_gain: 0.5
+  proposal_cls_sim_gain: 0.55
+  proposal_reg_sim_gain: 0.0
+  proposal_score_gain: 0.0
+  proposal_vote_gain: 0.50
+  proposal_recall_gain: 1.25
+  proposal_recall_radius: 1
+  temporal_cls_consistency: 0.01
+  fam_warmup_epochs: 3
+  fam_alpha_target: 0.45
+
+training_base:
+  config: ultralytics/cfg/models/mamba-yolo/Mamba-YOLO-T-VID.yaml
+  data: ultralytics/cfg/datasets/VisDrone-VID.yaml
+  data_task: vid
+  init_weights: output_dir/visdrone_vid/baseline/weights/best.pt
+  optimizer: AdamW
+  lr0: 0.0003
+  lrf: 0.01
+  warmup_epochs: 3.0
+  warmup_bias_lr: 0.0003
+  epochs: 30
+  imgsz: 640
+  batch_size: 2
+  workers: 8
+  mosaic: 0.0
+  mixup: 0.0
+
+latest_known_result:
+  source: user_reported
+  GT: 114132
+  Pred: 38275
+  IDTP: 20273
+  IDFP: 18002
+  IDFN: 93859
+  ID_Switches: 262
+  Frag: 984
+  IDF1: 0.2660376491893417
+  IDP: 0.529666884389288
+  IDR: 0.17762765920162618
+  macro_flicker: 0.14643362147372824
+  micro_flicker: 0.14883720930232558
+  total_pairs: 78475
+  total_changes: 11680
+  tracks_evaluated: 679
+  frames_dropped_no_match: 34965
+  iou_threshold: 0.5
+
+training_command:
+  - python
+  - mbyolo_train.py
+  - --task
+  - train
+  - --data
+  - ultralytics/cfg/datasets/VisDrone-VID.yaml
+  - --data_task
+  - vid
+  - --config
+  - ultralytics/cfg/models/mamba-yolo/Mamba-YOLO-T-VID.yaml
+  - --init_weights
+  - output_dir/visdrone_vid/baseline/weights/best.pt
+  - --epochs
+  - "30"
+  - --val_period
+  - "1"
+  - --batch_size
+  - "2"
+  - --imgsz
+  - "640"
+  - --workers
+  - "8"
+  - --device
+  - "0"
+  - --optimizer
+  - AdamW
+  - --lr0
+  - "0.0003"
+  - --lrf
+  - "0.01"
+  - --warmup_epochs
+  - "3.0"
+  - --warmup_bias_lr
+  - "0.0003"
+  - --mosaic
+  - "0.0"
+  - --mixup
+  - "0.0"
+  - --vid_clip_mode
+  - window
+  - --vid_window_size
+  - "16"
+  - --num_ref_frames
+  - "15"
+  - --clip_stride
+  - "1"
+  - --ref_sample
+  - adjacent
+  - --ref_aux_loss
+  - "0.0"
+  - --temporal_fusion
+  - yolov
+  - --yolov_cls_loss
+  - "0.30"
+  - --proposal_topk
+  - "700"
+  - --proposal_after_topk
+  - "220"
+  - --proposal_nms_radius
+  - "1"
+  - --proposal_spatial_sigma
+  - "0.12"
+  - --proposal_time_sigma
+  - "4.0"
+  - --proposal_loc_gain
+  - "0.5"
+  - --proposal_cls_sim_gain
+  - "0.55"
+  - --proposal_reg_sim_gain
+  - "0.0"
+  - --proposal_score_gain
+  - "0.0"
+  - --proposal_vote_gain
+  - "0.50"
+  - --proposal_recall_gain
+  - "1.25"
+  - --proposal_recall_radius
+  - "1"
+  - --temporal_cls_consistency
+  - "0.01"
+  - --fam_warmup_epochs
+  - "3"
+  - --fam_alpha_target
+  - "0.45"
+  - --extra_eval_period
+  - "1"
+  - --extra_eval_clip_inference
+  - --extra_eval_window_inference
+  - --extra_eval_official_root
+  - datasets/VisDrone-VID/raw/VisDrone2019-VID-val
+  - --project
+  - output_dir/visdrone_vid
+  - --name
+  - yolov_proposal_v2
+
+notes:
+  - Current model has surpassed the official Mamba-YOLO baseline on IDF1, IDP, IDR, ID switches, and fragmentation in the latest user-reported result.
+  - YOLOv8 still has stronger recall and IDF1, so the next bottleneck is recall rather than precision.
+  - The backbone and neck remain official Mamba-YOLO-T; temporal changes are in input organization, Detect_VID head, and losses.
+
