@@ -20,7 +20,7 @@ from pathlib import Path
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--baseline-weights", default="output_dir/visdrone_vid/baseline/weights/best.pt")
-    p.add_argument("--new-weights", default="output_dir/visdrone_vid/temporal_adapter_yolov_v3/weights/best.pt")
+    p.add_argument("--new-weights", default="output_dir/visdrone_vid/temporal_adapter_p4p5_yolov_v4/weights/best.pt")
     p.add_argument("--official-root", default="datasets/VisDrone-VID/raw/VisDrone2019-VID-val")
     p.add_argument("--out", default="output_dir/compare_vis")
     p.add_argument("--device", default="0")
@@ -44,6 +44,7 @@ def parse_args():
     p.add_argument("--temporal-fusion", default="yolov", choices=["fam", "proposal", "yolov", "fam_proposal", "logits", "logits_gated", "none"])
     p.add_argument("--temporal-adapter", default="affinity", choices=["none", "affinity"])
     p.add_argument("--temporal-adapter-time-sigma", type=float, default=4.0)
+    p.add_argument("--temporal-adapter-levels", default="p4p5", choices=["all", "p3", "p4", "p5", "p3p4", "p4p5", "none"])
     p.add_argument("--proposal-topk", type=int, default=700)
     p.add_argument("--proposal-spatial-sigma", type=float, default=0.12)
     p.add_argument("--proposal-cls-sim-gain", type=float, default=0.55)
@@ -135,6 +136,8 @@ def main():
                 args.temporal_adapter,
                 "--temporal_adapter_time_sigma",
                 args.temporal_adapter_time_sigma,
+                "--temporal_adapter_levels",
+                args.temporal_adapter_levels,
                 "--proposal_topk",
                 args.proposal_topk,
                 "--proposal_spatial_sigma",

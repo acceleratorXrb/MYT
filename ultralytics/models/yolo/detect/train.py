@@ -100,6 +100,7 @@ class DetectionTrainer(BaseTrainer):
                     adapter.enabled = str(getattr(self.args, "temporal_adapter", "none") or "none").lower() != "none"
                     adapter.num_ref_frames = head.num_ref_frames
                     adapter.time_sigma = float(getattr(self.args, "temporal_adapter_time_sigma", 4.0) or 0.0)
+                    adapter.levels = str(getattr(self.args, "temporal_adapter_levels", "all") or "all")
                     adapter.debug_temporal_adapter = bool(getattr(self.args, "debug_temporal_adapter", False))
                 spatial_sigma = float(getattr(self.args, "fam_spatial_sigma", 0.2) or 0.0)
                 for fam in getattr(head, "fams", []):

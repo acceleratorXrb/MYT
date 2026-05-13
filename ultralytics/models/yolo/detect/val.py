@@ -83,6 +83,7 @@ class DetectionValidator(BaseValidator):
                     adapter.enabled = str(getattr(self.args, "temporal_adapter", "none") or "none").lower() != "none"
                     adapter.num_ref_frames = int(getattr(self.args, "num_ref_frames", getattr(head, "num_ref_frames", 0)))
                     adapter.time_sigma = float(getattr(self.args, "temporal_adapter_time_sigma", 4.0) or 0.0)
+                    adapter.levels = str(getattr(self.args, "temporal_adapter_levels", "all") or "all")
 
         if self.args.save_hybrid:
             height, width = batch["img"].shape[2:]

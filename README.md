@@ -13,7 +13,7 @@ object detection. The current research constraint is:
 Current variant:
 
 ```text
-Mamba-YOLO-T-VID-TemporalAdapter-YOLOV-v3
+Mamba-YOLO-T-VID-P4P5-TemporalAdapter-YOLOV-v4
 ```
 
 High-level flow:
@@ -22,7 +22,7 @@ High-level flow:
 16-frame video window
   -> official Mamba-YOLO-T backbone
   -> official Mamba-YOLO-T neck / feature pyramid
-  -> TemporalFeatureAdapter
+  -> TemporalFeatureAdapter on P4/P5, P3 bypassed
   -> Detect_VID
       - YOLOv8-style bbox regression branch
       - raw classification branch
@@ -31,9 +31,10 @@ High-level flow:
   -> offline VID detections / flicker / MOT-ID metrics
 ```
 
-The official backbone and neck are not structurally modified. The new temporal
-feature adapter is added inside `Detect_VID` before the detection branches, so
-previous baseline head weights can still mostly load into `model.21.*`.
+The official backbone and neck are not structurally modified. The temporal
+feature adapter is added inside `Detect_VID` before the detection branches. In
+the current v4 experiment, P3 is kept untouched to protect small-object detail,
+while P4/P5 receive temporal feature aggregation.
 
 ## Quick Start
 
@@ -44,16 +45,16 @@ cd /root/autodl-tmp/MYT
 source .venv/bin/activate
 git pull
 
-python tools/model_variant.py train-command temporal_adapter_yolov_v3_2026-05-13 \
-  --name temporal_adapter_yolov_v3
+python tools/model_variant.py train-command temporal_adapter_p4p5_yolov_v4_2026-05-14 \
+  --name temporal_adapter_p4p5_yolov_v4
 ```
 
 To inspect saved model variants:
 
 ```bash
 python tools/model_variant.py list
-python tools/model_variant.py show temporal_adapter_yolov_v3_2026-05-13
-python tools/model_variant.py train-command temporal_adapter_yolov_v3_2026-05-13
+python tools/model_variant.py show temporal_adapter_p4p5_yolov_v4_2026-05-14
+python tools/model_variant.py train-command temporal_adapter_p4p5_yolov_v4_2026-05-14
 ```
 
 ## Important Files
@@ -88,7 +89,8 @@ python tools/model_variant.py train-command temporal_adapter_yolov_v3_2026-05-13
 | Path | Purpose |
 | --- | --- |
 | `model_variants/README.md` | Explains the model-variant record directory. |
-| `model_variants/temporal_adapter_yolov_v3_2026-05-13.yaml` | Current main model record: structure, key hyperparameters, notes, and training command. |
+| `model_variants/temporal_adapter_p4p5_yolov_v4_2026-05-14.yaml` | Current main model record: P4/P5 temporal adapter, key hyperparameters, notes, and training command. |
+| `model_variants/temporal_adapter_yolov_v3_2026-05-13.yaml` | Previous all-level temporal adapter record for rollback and ablation. |
 | `model_variants/yolov_proposal_v2_2026-05-13.yaml` | Previous YOLOV proposal-only model record for rollback and ablation. |
 | `tools/model_variant.py` | Small utility to list variants, show YAML records, and print stored training commands. |
 
@@ -128,7 +130,7 @@ When a new architecture stage becomes important, add a new YAML file under
 
 ## Current Main Hyperparameters
 
-These options define `Mamba-YOLO-T-VID-TemporalAdapter-YOLOV-v3`:
+These options define `Mamba-YOLO-T-VID-P4P5-TemporalAdapter-YOLOV-v4`:
 
 ```bash
 --vid_clip_mode window
@@ -136,6 +138,7 @@ These options define `Mamba-YOLO-T-VID-TemporalAdapter-YOLOV-v3`:
 --num_ref_frames 15
 --temporal_adapter affinity
 --temporal_adapter_time_sigma 4.0
+--temporal_adapter_levels p4p5
 --temporal_fusion yolov
 --yolov_cls_loss 0.30
 --proposal_topk 700
@@ -161,14 +164,14 @@ Recommended comparisons:
 
 - Official Mamba-YOLO-T baseline: single-frame Mamba-YOLO.
 - Official YOLOv8 baseline: single-frame YOLOv8.
-- Current new model: Mamba-YOLO-T backbone/neck plus TemporalFeatureAdapter and
-  YOLOV-style proposal head.
+- Current new model: Mamba-YOLO-T backbone/neck plus P4/P5 TemporalFeatureAdapter
+  and YOLOV-style proposal head.
 - Ablations: disable `temporal_adapter`, disable `proposal_vote_gain`, disable
   `proposal_recall_gain`, disable `proposal_after_topk/nms/time/loc`.
 
-The previous best new model improved precision and identity stability. The v3
-adapter is intended to improve recall by enhancing weak current-frame features
-before detection.
+The previous best new model improved precision and identity stability. The v4
+adapter is intended to recover recall by preserving P3 small-object features
+while still enhancing P4/P5 temporal semantics.
 
 ## Acknowledgement
 
@@ -192,4 +195,3 @@ This repository is based on:
       url={https://arxiv.org/abs/2406.05835},
 }
 ```
-

@@ -143,6 +143,8 @@ def build_extra_eval_callback(opt):
                         opt.temporal_adapter,
                         "--temporal_adapter_time_sigma",
                         opt.temporal_adapter_time_sigma,
+                        "--temporal_adapter_levels",
+                        opt.temporal_adapter_levels,
                         "--fam_conf_boost",
                         opt.fam_conf_boost,
                         "--fam_spatial_sigma",
@@ -239,6 +241,8 @@ def build_extra_eval_callback(opt):
                         opt.temporal_adapter,
                         "--temporal_adapter_time_sigma",
                         opt.temporal_adapter_time_sigma,
+                        "--temporal_adapter_levels",
+                        opt.temporal_adapter_levels,
                         "--fam_conf_boost",
                         opt.fam_conf_boost,
                         "--fam_spatial_sigma",
@@ -342,6 +346,7 @@ def set_detect_vid_temporal_fusion(
     proposal_loc_gain=None,
     temporal_adapter=None,
     temporal_adapter_time_sigma=None,
+    temporal_adapter_levels=None,
     debug_temporal_adapter=None,
 ):
     """Set Detect_VID temporal fusion options on a YOLO wrapper or raw model."""
@@ -370,6 +375,8 @@ def set_detect_vid_temporal_fusion(
                         adapter.enabled = str(temporal_adapter).lower() != "none"
                     if temporal_adapter_time_sigma is not None:
                         adapter.time_sigma = float(temporal_adapter_time_sigma)
+                    if temporal_adapter_levels is not None:
+                        adapter.levels = str(temporal_adapter_levels)
                     adapter.num_ref_frames = int(getattr(module, "num_ref_frames", adapter.num_ref_frames))
                     if debug_temporal_adapter is not None:
                         adapter.debug_temporal_adapter = bool(debug_temporal_adapter)
@@ -525,6 +532,7 @@ def parse_opt():
     parser.add_argument('--temporal_fusion', default='fam', choices=['fam', 'proposal', 'yolov', 'fam_proposal', 'logits', 'logits_gated', 'none'], help='Detect_VID temporal fusion mode')
     parser.add_argument('--temporal_adapter', default='none', choices=['none', 'affinity'], help='neck-to-head temporal feature adapter mode')
     parser.add_argument('--temporal_adapter_time_sigma', type=float, default=4.0, help='temporal Gaussian sigma for the feature adapter attention')
+    parser.add_argument('--temporal_adapter_levels', default='all', choices=['all', 'p3', 'p4', 'p5', 'p3p4', 'p4p5', 'none'], help='feature pyramid levels where temporal adapter is applied')
     parser.add_argument('--fam_conf_boost', type=float, default=0.0, help='positive-only ref confidence boost gain for FAM mode')
     parser.add_argument('--fam_spatial_sigma', type=float, default=0.2, help='normalized spatial sigma for local FAM attention; 0 disables')
     parser.add_argument('--proposal_topk', type=int, default=150, help='top-K key/ref locations per scale for YOLOV-style proposal temporal refinement')
@@ -592,6 +600,7 @@ if __name__ == '__main__':
         "temporal_fusion": opt.temporal_fusion,
         "temporal_adapter": opt.temporal_adapter,
         "temporal_adapter_time_sigma": opt.temporal_adapter_time_sigma,
+        "temporal_adapter_levels": opt.temporal_adapter_levels,
         "fam_conf_boost": opt.fam_conf_boost,
         "fam_spatial_sigma": opt.fam_spatial_sigma,
         "proposal_topk": opt.proposal_topk,
@@ -654,6 +663,7 @@ if __name__ == '__main__':
         opt.proposal_loc_gain,
         opt.temporal_adapter,
         opt.temporal_adapter_time_sigma,
+        opt.temporal_adapter_levels,
         opt.debug_temporal_adapter,
     )
     if task == "train":
@@ -681,6 +691,7 @@ if __name__ == '__main__':
                 opt.proposal_loc_gain,
                 opt.temporal_adapter,
                 opt.temporal_adapter_time_sigma,
+                opt.temporal_adapter_levels,
                 opt.debug_temporal_adapter,
             )
         if opt.fam_warmup_epochs > 0:

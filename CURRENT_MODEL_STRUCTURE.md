@@ -3,16 +3,16 @@
 This file marks the model structure currently used as the main VID experiment
 configuration in this repository.
 
-Last updated: 2026-05-13
+Last updated: 2026-05-14
 
 ## Model Name
 
-**Mamba-YOLO-T-VID with Temporal Feature Adapter and YOLOV-style proposal temporal refinement**
+**Mamba-YOLO-T-VID with P4/P5 Temporal Feature Adapter and YOLOV-style proposal temporal refinement**
 
 Short name used in notes:
 
 ```text
-Mamba-YOLO-T-VID-TemporalAdapter-YOLOV-v3
+Mamba-YOLO-T-VID-P4P5-TemporalAdapter-YOLOV-v4
 ```
 
 ## Fixed Backbone and Neck
@@ -23,7 +23,7 @@ The backbone and neck are kept from the official Mamba-YOLO-T detection model:
 Input video window
   -> frame-wise Mamba-YOLO-T backbone
   -> Mamba-YOLO neck / feature pyramid
-  -> TemporalFeatureAdapter
+  -> TemporalFeatureAdapter on P4/P5 only
   -> P3, P4, P5 multi-scale features
 ```
 
@@ -40,7 +40,8 @@ The current main detection head is:
 ```text
 Detect_VID Head
   - TemporalFeatureAdapter
-      - per-scale P3/P4/P5 temporal affinity over the 16-frame window
+      - P3 is bypassed to protect small-object responses
+      - P4/P5 temporal affinity over the 16-frame window
       - adjacent-frame reference mask
       - temporal-distance attention bias
       - depthwise local spatial context before feature aggregation
@@ -60,8 +61,9 @@ Detect_VID Head
 ```
 
 The frame-local bbox regression branch is kept unchanged. Temporal information
-is now used twice: first at feature level by `TemporalFeatureAdapter`, then at
-proposal/class-logit level by `ProposalTemporalRefiner`.
+is now used twice: first at feature level by `TemporalFeatureAdapter` on P4/P5,
+then at proposal/class-logit level by `ProposalTemporalRefiner`. P3 remains the
+raw Mamba-YOLO neck output to protect small-object recall.
 
 ## Current Main Structural Hyperparameters
 
@@ -73,6 +75,7 @@ These hyperparameters define the current main structure:
 --num_ref_frames 15
 --temporal_adapter affinity
 --temporal_adapter_time_sigma 4.0
+--temporal_adapter_levels p4p5
 --temporal_fusion yolov
 --ref_aux_loss 0.0
 --yolov_cls_loss 0.30
@@ -98,10 +101,11 @@ These hyperparameters define the current main structure:
 frames in the window are treated as key frames.
 
 `temporal_adapter=affinity` enables the feature-level temporal adapter. It
-aggregates P3/P4/P5 features across the same 16-frame window before the detect
-branches run. This is inspired by FGFA/SELSA-style video feature aggregation:
-neighboring frames can enhance weak current-frame features before box/class
-prediction.
+aggregates selected feature pyramid levels across the same 16-frame window
+before the detect branches run. In the current variant,
+`temporal_adapter_levels=p4p5` keeps P3 unchanged and applies feature-level
+temporal aggregation only to P4/P5. This is intended to keep small-object recall
+from P3 while still improving mid/large-object stability and context on P4/P5.
 
 `temporal_fusion=yolov` selects the YOLOV-style proposal temporal refinement
 path. During training, the original detection output is supervised by the normal
@@ -172,6 +176,7 @@ The current model structure corresponds to commands that include:
 --num_ref_frames 15 \
 --temporal_adapter affinity \
 --temporal_adapter_time_sigma 4.0 \
+--temporal_adapter_levels p4p5 \
 --temporal_fusion yolov \
 --proposal_after_topk 220 \
 --proposal_nms_radius 1 \
@@ -186,4 +191,3 @@ The current model structure corresponds to commands that include:
 
 If these options are changed, the model head structure or behavior should be
 treated as a different experimental variant.
-

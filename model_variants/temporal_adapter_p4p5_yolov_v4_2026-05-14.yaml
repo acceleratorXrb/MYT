@@ -1,7 +1,7 @@
-id: temporal_adapter_yolov_v3_2026-05-13
-date: "2026-05-13"
-name: Mamba-YOLO-T-VID-TemporalAdapter-YOLOV-v3
-status: previous_main
+id: temporal_adapter_p4p5_yolov_v4_2026-05-14
+date: "2026-05-14"
+name: Mamba-YOLO-T-VID-P4P5-TemporalAdapter-YOLOV-v4
+status: current_main
 
 constraint:
   keep_backbone: official Mamba-YOLO-T
@@ -25,9 +25,11 @@ architecture:
   added_feature_adapter:
     name: TemporalFeatureAdapter
     placement: inside Detect_VID before cv2/cv3 branches
-    purpose: feature-level temporal enhancement before detection
+    active_levels: P4/P5
+    bypass_levels: P3
+    purpose: enhance medium/deep temporal semantics while preserving P3 small-object detail
     components:
-      - per-scale P3/P4/P5 temporal affinity
+      - per-scale temporal affinity on selected levels
       - adjacent-frame reference mask
       - temporal-distance attention bias
       - depthwise local spatial context
@@ -64,7 +66,7 @@ main_hyperparameters:
   ref_sample: adjacent
   temporal_adapter: affinity
   temporal_adapter_time_sigma: 4.0
-  temporal_adapter_levels: all
+  temporal_adapter_levels: p4p5
   temporal_fusion: yolov
   ref_aux_loss: 0.0
   yolov_cls_loss: 0.30
@@ -155,7 +157,7 @@ training_command:
   - --temporal_adapter_time_sigma
   - "4.0"
   - --temporal_adapter_levels
-  - all
+  - p4p5
   - --ref_aux_loss
   - "0.0"
   - --temporal_fusion
@@ -201,9 +203,9 @@ training_command:
   - --project
   - output_dir/visdrone_vid
   - --name
-  - temporal_adapter_yolov_v3
+  - temporal_adapter_p4p5_yolov_v4
 
 notes:
-  - This is the first main variant that adds feature-level video aggregation.
-  - The adapter is intentionally added inside Detect_VID so the YAML Detect layer index remains stable and baseline head weights can still load into model.21.*.
-  - The previous v2 model is still available as yolov_proposal_v2_2026-05-13.
+  - This variant keeps the v3 YOLOV-style proposal head but restricts feature-level temporal aggregation to P4/P5.
+  - P3 is bypassed because VisDrone small targets depend heavily on high-resolution P3 features, and the all-level v3 adapter improved stability while still losing recall.
+  - Use this as the next recall-recovery experiment before considering backbone/neck changes.

@@ -130,6 +130,7 @@ ref_aux_loss: 0.0 # (float) auxiliary detection loss weight for reference frames
 temporal_fusion: fam # (str) Detect_VID temporal fusion: fam | proposal | yolov | fam_proposal | logits | logits_gated | none
 temporal_adapter: none # (str) neck-to-head temporal feature adapter: none | affinity
 temporal_adapter_time_sigma: 4.0 # (float) temporal Gaussian sigma for feature-adapter attention
+temporal_adapter_levels: all # (str) feature pyramid levels for adapter: all | p3 | p4 | p5 | p3p4 | p4p5 | none
 fam_conf_boost: 0.0 # (float) positive-only ref confidence boost gain for FAM mode
 fam_spatial_sigma: 0.2 # (float) normalized spatial sigma for local FAM attention; 0 disables
 proposal_topk: 150 # (int) top-K key/ref locations per scale for YOLOV-style proposal temporal refinement

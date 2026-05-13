@@ -33,6 +33,7 @@ def parse_args():
     parser.add_argument("--temporal_fusion", default=None, choices=["fam", "proposal", "yolov", "fam_proposal", "logits", "logits_gated", "none"])
     parser.add_argument("--temporal_adapter", default=None, choices=["none", "affinity"])
     parser.add_argument("--temporal_adapter_time_sigma", type=float, default=None)
+    parser.add_argument("--temporal_adapter_levels", default=None, choices=["all", "p3", "p4", "p5", "p3p4", "p4p5", "none"])
     parser.add_argument("--fam_conf_boost", type=float, default=None)
     parser.add_argument("--fam_spatial_sigma", type=float, default=None)
     parser.add_argument("--proposal_topk", type=int, default=None)
@@ -141,6 +142,8 @@ def configure_temporal_options(model, args):
                     adapter.enabled = args.temporal_adapter != "none"
                 if args.temporal_adapter_time_sigma is not None:
                     adapter.time_sigma = float(args.temporal_adapter_time_sigma)
+                if args.temporal_adapter_levels is not None:
+                    adapter.levels = args.temporal_adapter_levels
             if args.fam_conf_boost is not None:
                 module.fam_conf_boost = float(args.fam_conf_boost)
             if args.fam_spatial_sigma is not None:

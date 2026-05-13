@@ -100,16 +100,34 @@ class TemporalFeatureAdapter(nn.Module):
         attn_ratio: float = 0.5,
         spatial_kernel: int = 3,
         enabled: bool = True,
+        levels: str = "all",
     ):
         super().__init__()
         self.ch = list(ch)
         self.num_ref_frames = num_ref_frames
         self.time_sigma = time_sigma
         self.enabled = enabled
+        self.levels = levels
         self.debug_temporal_adapter = False
         self._debug_printed = 0
         self.clip_layout: tuple[int, int] | None = None
         self.blocks = nn.ModuleList(TemporalScaleAdapter(c, attn_ratio, spatial_kernel) for c in ch)
+
+    def _active_indices(self, count: int) -> set[int]:
+        mode = str(getattr(self, "levels", "all") or "all").lower().replace(",", "_")
+        aliases = {
+            "all": set(range(count)),
+            "p3p4p5": set(range(count)),
+            "p3": {0},
+            "p4": {1},
+            "p5": {2},
+            "p3p4": {0, 1},
+            "p4p5": {1, 2},
+            "p3_p4": {0, 1},
+            "p4_p5": {1, 2},
+            "none": set(),
+        }
+        return {i for i in aliases.get(mode, set(range(count))) if i < count}
 
     def _window_ref_indices(self, key_pos: int, T: int, num_refs: int) -> list[int]:
         if T <= 1 or num_refs <= 0:
@@ -143,9 +161,10 @@ class TemporalFeatureAdapter(nn.Module):
             return list(xs)
 
         mask = self._frame_mask(T, xs[0].device)
+        active = self._active_indices(len(xs))
         out = []
         for i, x in enumerate(xs):
-            if i < len(self.blocks):
+            if i in active and i < len(self.blocks):
                 out.append(self.blocks[i](x, (B, T), mask, float(getattr(self, "time_sigma", 0.0) or 0.0)))
             else:
                 out.append(x)
@@ -157,7 +176,8 @@ class TemporalFeatureAdapter(nn.Module):
             print(
                 "[debug-temporal-adapter] "
                 f"B={B} T={T} enabled={self.enabled} num_ref_frames={self.num_ref_frames} "
-                f"time_sigma={self.time_sigma} shapes={shapes} ref_debug={refs} alpha={alpha}",
+                f"levels={self.levels} active={sorted(active)} time_sigma={self.time_sigma} "
+                f"shapes={shapes} ref_debug={refs} alpha={alpha}",
                 flush=True,
             )
             self._debug_printed += 1
@@ -166,7 +186,6 @@ class TemporalFeatureAdapter(nn.Module):
     def extra_repr(self) -> str:
         return (
             f"ch={self.ch}, enabled={self.enabled}, num_ref_frames={self.num_ref_frames}, "
-            f"time_sigma={self.time_sigma}"
+            f"time_sigma={self.time_sigma}, levels={self.levels}"
         )
-
 
