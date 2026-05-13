@@ -128,6 +128,8 @@ vid_clip_mode: center # (str) VID training layout: center | window
 vid_window_size: 0 # (int) frames per window when vid_clip_mode=window; 0 defaults to num_ref_frames+1
 ref_aux_loss: 0.0 # (float) auxiliary detection loss weight for reference frames in VID clip training
 temporal_fusion: fam # (str) Detect_VID temporal fusion: fam | proposal | yolov | fam_proposal | logits | logits_gated | none
+temporal_adapter: none # (str) neck-to-head temporal feature adapter: none | affinity
+temporal_adapter_time_sigma: 4.0 # (float) temporal Gaussian sigma for feature-adapter attention
 fam_conf_boost: 0.0 # (float) positive-only ref confidence boost gain for FAM mode
 fam_spatial_sigma: 0.2 # (float) normalized spatial sigma for local FAM attention; 0 disables
 proposal_topk: 150 # (int) top-K key/ref locations per scale for YOLOV-style proposal temporal refinement
@@ -150,6 +152,7 @@ debug_clip_shape: False # (bool) print first training batch image shape and clip
 debug_clip_aug: False # (bool) print first few VID clip augmentation decisions and output shapes
 debug_clip_refs: False # (bool) print first few VID key/ref frame paths and positions
 debug_vid_head: False # (bool) print first few Detect_VID temporal head shapes and ref indices
+debug_temporal_adapter: False # (bool) print first few TemporalFeatureAdapter shapes and ref indices
 
 # Custom config.yaml ---------------------------------------------------------------------------------------------------
 cfg: # (str, optional) for overriding defaults.yaml

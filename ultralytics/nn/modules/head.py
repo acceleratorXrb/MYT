@@ -14,6 +14,7 @@ from .block import DFL, BNContrastiveHead, ContrastiveHead, Proto
 from .conv import Conv
 from .transformer import MLP, DeformableTransformerDecoder, DeformableTransformerDecoderLayer
 from .utils import bias_init_with_prob, linear_init
+from .temporal_adapter import TemporalFeatureAdapter
 from .yolov_fam import FeatureAggregationModule, ProposalTemporalRefiner
 
 __all__ = "Detect", "Detect_VID", "Segment", "Pose", "Classify", "OBB", "RTDETRDecoder"
@@ -130,6 +131,12 @@ class Detect_VID(Detect):
             for _ in ch
         )
         self.num_ref_frames = num_ref_frames
+        self.temporal_adapter = TemporalFeatureAdapter(
+            list(ch),
+            num_ref_frames=num_ref_frames,
+            time_sigma=4.0,
+            enabled=False,
+        )
         self.temporal_fusion = "fam"  # fam | proposal | yolov | fam_proposal | logits | logits_gated | none
         self.fam_conf_boost = 0.0
         self.temporal_cls_consistency = 0.0
@@ -468,6 +475,11 @@ class Detect_VID(Detect):
             B, T = self.clip_layout
         else:
             B, T = x[0].shape[0], 1
+
+        if self.clip_layout is not None and getattr(self.temporal_adapter, "enabled", False):
+            self.temporal_adapter.clip_layout = self.clip_layout
+            self.temporal_adapter.num_ref_frames = int(getattr(self, "num_ref_frames", T - 1))
+            x = self.temporal_adapter(x)
 
         aux_outputs = []
         for i in range(self.nl):

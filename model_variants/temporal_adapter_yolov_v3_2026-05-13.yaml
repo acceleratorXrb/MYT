@@ -1,13 +1,14 @@
-id: yolov_proposal_v2_2026-05-13
+id: temporal_adapter_yolov_v3_2026-05-13
 date: "2026-05-13"
-name: Mamba-YOLO-T-VID-YOLOV-Proposal-v2
-status: previous_main
+name: Mamba-YOLO-T-VID-TemporalAdapter-YOLOV-v3
+status: current_main
 
 constraint:
   keep_backbone: official Mamba-YOLO-T
   keep_neck: official Mamba-YOLO-T neck / feature pyramid
   editable_parts:
     - VID input window organization
+    - added TemporalFeatureAdapter after the neck
     - Detect_VID head
     - temporal proposal refinement
     - auxiliary losses
@@ -19,7 +20,22 @@ architecture:
     - flatten window frames into an image batch
     - run each frame through Mamba-YOLO-T backbone once
     - run each frame through Mamba-YOLO neck once
+    - keep official backbone/neck topology unchanged
     - produce P3/P4/P5 features for each frame
+  added_feature_adapter:
+    name: TemporalFeatureAdapter
+    placement: inside Detect_VID before cv2/cv3 branches
+    purpose: feature-level temporal enhancement before detection
+    components:
+      - per-scale P3/P4/P5 temporal affinity
+      - adjacent-frame reference mask
+      - temporal-distance attention bias
+      - depthwise local spatial context
+      - residual feature update with alpha warmup
+    references:
+      - FGFA-style feature aggregation
+      - SELSA-style temporal feature relation
+      - YOLOV-style video-window processing
   head:
     name: Detect_VID
     regression: YOLOv8/Mamba-YOLO current-frame bbox distribution branch
@@ -46,6 +62,8 @@ main_hyperparameters:
   num_ref_frames: 15
   clip_stride: 1
   ref_sample: adjacent
+  temporal_adapter: affinity
+  temporal_adapter_time_sigma: 4.0
   temporal_fusion: yolov
   ref_aux_loss: 0.0
   yolov_cls_loss: 0.30
@@ -62,8 +80,8 @@ main_hyperparameters:
   proposal_recall_gain: 1.25
   proposal_recall_radius: 1
   temporal_cls_consistency: 0.01
-  fam_warmup_epochs: 3
-  fam_alpha_target: 0.45
+  fam_warmup_epochs: 5
+  fam_alpha_target: 0.65
 
 training_base:
   config: ultralytics/cfg/models/mamba-yolo/Mamba-YOLO-T-VID.yaml
@@ -81,26 +99,6 @@ training_base:
   workers: 8
   mosaic: 0.0
   mixup: 0.0
-
-latest_known_result:
-  source: user_reported
-  GT: 114132
-  Pred: 38275
-  IDTP: 20273
-  IDFP: 18002
-  IDFN: 93859
-  ID_Switches: 262
-  Frag: 984
-  IDF1: 0.2660376491893417
-  IDP: 0.529666884389288
-  IDR: 0.17762765920162618
-  macro_flicker: 0.14643362147372824
-  micro_flicker: 0.14883720930232558
-  total_pairs: 78475
-  total_changes: 11680
-  tracks_evaluated: 679
-  frames_dropped_no_match: 34965
-  iou_threshold: 0.5
 
 training_command:
   - python
@@ -151,6 +149,10 @@ training_command:
   - "1"
   - --ref_sample
   - adjacent
+  - --temporal_adapter
+  - affinity
+  - --temporal_adapter_time_sigma
+  - "4.0"
   - --ref_aux_loss
   - "0.0"
   - --temporal_fusion
@@ -184,9 +186,9 @@ training_command:
   - --temporal_cls_consistency
   - "0.01"
   - --fam_warmup_epochs
-  - "3"
+  - "5"
   - --fam_alpha_target
-  - "0.45"
+  - "0.65"
   - --extra_eval_period
   - "1"
   - --extra_eval_clip_inference
@@ -196,9 +198,10 @@ training_command:
   - --project
   - output_dir/visdrone_vid
   - --name
-  - yolov_proposal_v2
+  - temporal_adapter_yolov_v3
 
 notes:
-  - Current model has surpassed the official Mamba-YOLO baseline on IDF1, IDP, IDR, ID switches, and fragmentation in the latest user-reported result.
-  - YOLOv8 still has stronger recall and IDF1, so the next bottleneck is recall rather than precision.
-  - The backbone and neck remain official Mamba-YOLO-T; temporal changes are in input organization, Detect_VID head, and losses.
+  - This is the first main variant that adds feature-level video aggregation.
+  - The adapter is intentionally added inside Detect_VID so the YAML Detect layer index remains stable and baseline head weights can still load into model.21.*.
+  - The previous v2 model is still available as yolov_proposal_v2_2026-05-13.
+

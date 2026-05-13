@@ -667,7 +667,9 @@ def set_alpha_warmup(model: nn.Module, target: float) -> None:
     Use this from the trainer to warm up alpha from 0 -> target over the first
     few epochs.
     """
+    from .temporal_adapter import TemporalScaleAdapter
+
     for m in model.modules():
-        if isinstance(m, (FeatureAggregationModule, ProposalTemporalRefiner)):
+        if isinstance(m, (FeatureAggregationModule, ProposalTemporalRefiner, TemporalScaleAdapter)):
             with torch.no_grad():
                 m.alpha.fill_(float(target))

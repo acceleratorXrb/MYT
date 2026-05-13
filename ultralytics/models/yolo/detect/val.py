@@ -77,6 +77,12 @@ class DetectionValidator(BaseValidator):
             if isinstance(head, Detect_VID):
                 cl = batch["clip_layout"].view(-1)
                 head.clip_layout = (int(cl[0].item()), int(cl[1].item()))
+                adapter = getattr(head, "temporal_adapter", None)
+                if adapter is not None:
+                    adapter.clip_layout = head.clip_layout
+                    adapter.enabled = str(getattr(self.args, "temporal_adapter", "none") or "none").lower() != "none"
+                    adapter.num_ref_frames = int(getattr(self.args, "num_ref_frames", getattr(head, "num_ref_frames", 0)))
+                    adapter.time_sigma = float(getattr(self.args, "temporal_adapter_time_sigma", 4.0) or 0.0)
 
         if self.args.save_hybrid:
             height, width = batch["img"].shape[2:]

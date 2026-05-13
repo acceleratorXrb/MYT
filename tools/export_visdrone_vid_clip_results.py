@@ -31,6 +31,8 @@ def parse_args():
     parser.add_argument("--all_keys", action="store_true", help="Infer non-overlapping windows and output every frame once.")
     parser.add_argument("--window_size", type=int, default=16, help="Frames per window when --all_keys is enabled.")
     parser.add_argument("--temporal_fusion", default=None, choices=["fam", "proposal", "yolov", "fam_proposal", "logits", "logits_gated", "none"])
+    parser.add_argument("--temporal_adapter", default=None, choices=["none", "affinity"])
+    parser.add_argument("--temporal_adapter_time_sigma", type=float, default=None)
     parser.add_argument("--fam_conf_boost", type=float, default=None)
     parser.add_argument("--fam_spatial_sigma", type=float, default=None)
     parser.add_argument("--proposal_topk", type=int, default=None)
@@ -119,6 +121,11 @@ def set_clip_layout(model, layout, all_keys=False, num_ref_frames=None):
             module.clip_all_keys = bool(all_keys)
             if num_ref_frames is not None:
                 module.num_ref_frames = int(num_ref_frames)
+            adapter = getattr(module, "temporal_adapter", None)
+            if adapter is not None:
+                adapter.clip_layout = layout
+                if num_ref_frames is not None:
+                    adapter.num_ref_frames = int(num_ref_frames)
 
 
 def configure_temporal_options(model, args):
@@ -128,6 +135,12 @@ def configure_temporal_options(model, args):
         if isinstance(module, Detect_VID):
             if args.temporal_fusion is not None:
                 module.temporal_fusion = args.temporal_fusion
+            adapter = getattr(module, "temporal_adapter", None)
+            if adapter is not None:
+                if args.temporal_adapter is not None:
+                    adapter.enabled = args.temporal_adapter != "none"
+                if args.temporal_adapter_time_sigma is not None:
+                    adapter.time_sigma = float(args.temporal_adapter_time_sigma)
             if args.fam_conf_boost is not None:
                 module.fam_conf_boost = float(args.fam_conf_boost)
             if args.fam_spatial_sigma is not None:

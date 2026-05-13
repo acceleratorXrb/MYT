@@ -1,30 +1,28 @@
 # Mamba-YOLO-T-VID for VisDrone Video Detection
 
-本仓库基于官方 Mamba-YOLO 和 Ultralytics YOLOv8，面向 VisDrone-VID
-无人机视频目标检测任务做视频化改造。当前主线要求是：
+This repository adapts the official Mamba-YOLO codebase for VisDrone-VID video
+object detection. The current research constraint is:
 
-- 保持官方 Mamba-YOLO-T 的 backbone 和 neck，不破坏其中的 ODSS/VSS/XSS 结构。
-- 将视频输入、检测头、时序 proposal 融合、离线视频评估流程逐步向 YOLOV 靠齐。
-- 同时评估单帧检测指标、分类 flicker、一致性、MOT/ID 等视频指标。
+- Keep the official Mamba-YOLO-T backbone and neck unchanged.
+- Add video-specific modules after the neck and inside the detection head.
+- Move the input organization, temporal proposal refinement, and offline video
+  evaluation path toward YOLOV.
 
-当前主模型记录在 `CURRENT_MODEL_STRUCTURE.md`，历史模型版本记录在
-`model_variants/`。
+## Current Main Model
 
-## 当前主模型
-
-当前主模型为：
+Current variant:
 
 ```text
-Mamba-YOLO-T-VID-YOLOV-Proposal-v2
+Mamba-YOLO-T-VID-TemporalAdapter-YOLOV-v3
 ```
 
-整体结构：
+High-level flow:
 
 ```text
 16-frame video window
   -> official Mamba-YOLO-T backbone
   -> official Mamba-YOLO-T neck / feature pyramid
-  -> P3/P4/P5 features
+  -> TemporalFeatureAdapter
   -> Detect_VID
       - YOLOv8-style bbox regression branch
       - raw classification branch
@@ -33,106 +31,111 @@ Mamba-YOLO-T-VID-YOLOV-Proposal-v2
   -> offline VID detections / flicker / MOT-ID metrics
 ```
 
-最新记录的模型版本：
+The official backbone and neck are not structurally modified. The new temporal
+feature adapter is added inside `Detect_VID` before the detection branches, so
+previous baseline head weights can still mostly load into `model.21.*`.
 
-```bash
-python tools/model_variant.py list
-python tools/model_variant.py show yolov_proposal_v2_2026-05-13
-python tools/model_variant.py train-command yolov_proposal_v2_2026-05-13
-```
+## Quick Start
 
-## 快速训练
-
-服务器上推荐从项目目录运行：
+On the training server:
 
 ```bash
 cd /root/autodl-tmp/MYT
 source .venv/bin/activate
 git pull
 
-python tools/model_variant.py train-command yolov_proposal_v2_2026-05-13 \
-  --name yolov_proposal_v2
+python tools/model_variant.py train-command temporal_adapter_yolov_v3_2026-05-13 \
+  --name temporal_adapter_yolov_v3
 ```
 
-如果需要直接执行完整命令，可以从上面的 `train-command` 输出复制运行。
+To inspect saved model variants:
 
-## 重要文件说明
+```bash
+python tools/model_variant.py list
+python tools/model_variant.py show temporal_adapter_yolov_v3_2026-05-13
+python tools/model_variant.py train-command temporal_adapter_yolov_v3_2026-05-13
+```
 
-### 项目入口
+## Important Files
 
-| 文件 | 作用 |
+### Main Entry Points
+
+| File | Purpose |
 | --- | --- |
-| `mbyolo_train.py` | 训练、验证、预测、导出的统一入口。新增了 VID window 输入、时序融合参数、额外视频指标评估回调。 |
-| `setup.sh` | 服务器环境准备脚本，安装系统依赖、Python 虚拟环境依赖、VisDrone 官方工具等。 |
-| `RUN_VISDRONE_VID.md` | VisDrone-VID 数据准备、训练、额外评估的运行说明。 |
-| `RUN_VISDRONE_VID_YOLOV.md` | 当前 YOLOV-style 视频模型相关运行说明。 |
-| `CURRENT_MODEL_STRUCTURE.md` | 当前主实验模型结构标记文件，用于论文描述和实验复现。 |
-| `MODEL_HISTORY.md` | 历史模型版本索引，记录每个阶段模型对应的 YAML 文件。 |
+| `mbyolo_train.py` | Unified entry for train/val/test/predict/export. It also wires VID window input, temporal-fusion arguments, and periodic extra video evaluation. |
+| `setup.sh` | Server setup script for system packages, Python environment, dependencies, and VisDrone toolkit files. |
+| `RUN_VISDRONE_VID.md` | VisDrone-VID preparation and training notes. |
+| `RUN_VISDRONE_VID_YOLOV.md` | Notes for the YOLOV-style VID model path. |
+| `CURRENT_MODEL_STRUCTURE.md` | Current model-structure marker for thesis writing and reproducibility. |
+| `MODEL_HISTORY.md` | Index of saved model-stage records. |
 
-### 模型与配置
+### Model and Config Files
 
-| 路径 | 作用 |
+| Path | Purpose |
 | --- | --- |
-| `ultralytics/cfg/models/mamba-yolo/` | Mamba-YOLO 模型 YAML。当前 VID 主模型使用 `Mamba-YOLO-T-VID.yaml`。 |
-| `ultralytics/cfg/datasets/VisDrone-VID.yaml` | VisDrone-VID 数据集配置。 |
-| `ultralytics/cfg/default.yaml` | Ultralytics 默认训练参数，已加入 VID 和 proposal temporal fusion 参数。 |
-| `ultralytics/nn/modules/head.py` | 检测头定义。`Detect_VID` 在这里实现，是当前视频模型的核心入口。 |
-| `ultralytics/nn/modules/yolov_fam.py` | 视频时序融合模块，包括 FAM 和 YOLOV-style `ProposalTemporalRefiner`。 |
-| `ultralytics/models/yolo/detect/train.py` | 训练时把 VID clip layout、时序融合参数传入 `Detect_VID`。 |
-| `ultralytics/utils/loss.py` | YOLO 检测损失和 VID 辅助损失，包括 YOLOV-style refined cls auxiliary loss。 |
+| `ultralytics/cfg/models/mamba-yolo/Mamba-YOLO-T-VID.yaml` | VID model YAML. It keeps the official Mamba-YOLO-T backbone/neck and uses `Detect_VID`. |
+| `ultralytics/cfg/datasets/VisDrone-VID.yaml` | VisDrone-VID dataset config. |
+| `ultralytics/cfg/default.yaml` | Default Ultralytics arguments, extended with VID, temporal adapter, and proposal-refinement options. |
+| `ultralytics/nn/modules/head.py` | Detection heads. `Detect_VID` is the current video head and owns the temporal adapter plus YOLOV-style proposal refiner. |
+| `ultralytics/nn/modules/temporal_adapter.py` | Added feature-level temporal adapter between neck features and detect branches. |
+| `ultralytics/nn/modules/yolov_fam.py` | FAM and YOLOV-style proposal temporal refinement modules. |
+| `ultralytics/models/yolo/detect/train.py` | Passes VID clip layout and temporal options into `Detect_VID` during training. |
+| `ultralytics/models/yolo/detect/val.py` | Passes VID clip layout and temporal options during validation. |
+| `ultralytics/utils/loss.py` | YOLO detection losses plus VID auxiliary losses, including YOLOV-style refined-class auxiliary loss. |
 
-### 模型版本记录
+### Model Variant Records
 
-| 路径 | 作用 |
+| Path | Purpose |
 | --- | --- |
-| `model_variants/README.md` | 模型版本记录目录说明。 |
-| `model_variants/yolov_proposal_v2_2026-05-13.yaml` | 当前主模型的完整记录：结构、关键超参、指标、训练命令。 |
-| `tools/model_variant.py` | 模型版本管理小工具，可列出版本、查看 YAML、打印训练命令。 |
+| `model_variants/README.md` | Explains the model-variant record directory. |
+| `model_variants/temporal_adapter_yolov_v3_2026-05-13.yaml` | Current main model record: structure, key hyperparameters, notes, and training command. |
+| `model_variants/yolov_proposal_v2_2026-05-13.yaml` | Previous YOLOV proposal-only model record for rollback and ablation. |
+| `tools/model_variant.py` | Small utility to list variants, show YAML records, and print stored training commands. |
 
-后续每次出现重要结构改动时，应该新增一个 `model_variants/*.yaml`，不要覆盖旧版本。
+When a new architecture stage becomes important, add a new YAML file under
+`model_variants/` instead of overwriting old records.
 
-### VisDrone 数据工具
+### VisDrone Data Tools
 
-| 文件 | 作用 |
+| File | Purpose |
 | --- | --- |
-| `tools/download_visdrone_vid_zips.py` | 下载 VisDrone-VID 数据压缩包。 |
-| `tools/prepare_visdrone_vid_yolo.py` | 将 VisDrone-VID 转成 YOLO/VID 训练所需目录与标签格式。 |
-| `tools/verify_visdrone_vid_source.py` | 检查原始 VisDrone-VID 数据目录是否完整。 |
-| `tools/check_visdrone_vid_runtime.py` | 检查训练和评估所需数据、路径、依赖是否可用。 |
+| `tools/download_visdrone_vid_zips.py` | Download VisDrone-VID zip files. |
+| `tools/prepare_visdrone_vid_yolo.py` | Convert VisDrone-VID annotations into YOLO/VID training format. |
+| `tools/verify_visdrone_vid_source.py` | Check whether the raw VisDrone-VID split is complete. |
+| `tools/check_visdrone_vid_runtime.py` | Check dataset paths and runtime dependencies. |
 
-### 检测结果导出
+### Export and Evaluation Tools
 
-| 文件 | 作用 |
+| File | Purpose |
 | --- | --- |
-| `tools/export_visdrone_vid_results.py` | 单帧检测导出，适合 baseline Mamba-YOLO 或 YOLOv8。 |
-| `tools/export_visdrone_vid_clip_results.py` | 离线 clip/window 检测导出，适合当前 VID 新模型。 |
-| `tools/export_visdrone_vid_tracks.py` | 单帧检测 + ByteTrack 的轨迹导出。 |
-| `tools/export_visdrone_vid_clip_tracks.py` | 离线 clip/window 检测 + ByteTrack 的轨迹导出，当前 MOT/ID 推荐使用这个。 |
-| `tools/temporal_state.py` | 视频序列切换时重置模型时序状态的辅助工具。 |
+| `tools/export_visdrone_vid_results.py` | Single-frame detection export for baseline Mamba-YOLO or YOLOv8. |
+| `tools/export_visdrone_vid_clip_results.py` | Offline clip/window detection export for the VID model. |
+| `tools/export_visdrone_vid_tracks.py` | Single-frame detection plus ByteTrack export. |
+| `tools/export_visdrone_vid_clip_tracks.py` | Offline clip/window detection plus ByteTrack export. Current MOT/ID evaluation should use this path. |
+| `tools/eval_visdrone_vid_cls_flicker.py` | Classification flicker metrics: `macro_flicker` and `micro_flicker`. |
+| `tools/eval_visdrone_vid_mot.py` | Current MOT/ID metrics: IDF1, IDP, IDR, ID switches, and fragmentation. |
+| `tools/eval_visdrone_vid_official.py` | Wrapper for official VisDrone AP/AR evaluation. Periodic extra-eval does not run official AP/AR by default. |
+| `tools/run_visdrone_vid_official_eval.py` | Manual official VisDrone VID evaluation runner. |
+| `tools/temporal_state.py` | Helper for resetting temporal state across video sequences. |
 
-### 指标评估
+### Qualitative Comparison Tools
 
-| 文件 | 作用 |
+| File | Purpose |
 | --- | --- |
-| `tools/eval_visdrone_vid_cls_flicker.py` | 计算分类抖动指标，包括 `macro_flicker` 和 `micro_flicker`。 |
-| `tools/eval_visdrone_vid_mot.py` | 计算当前自实现 MOT/ID 指标，包括 IDF1、IDP、IDR、ID Switches、Frag。 |
-| `tools/eval_visdrone_vid_official.py` | VisDrone 官方 AP/AR 工具封装，当前周期评估默认不跑官方 AP/AR。 |
-| `tools/run_visdrone_vid_official_eval.py` | 手动运行官方 VisDrone VID 评估流程。 |
+| `tools/run_visdrone_comparison_examples.py` | One-command pipeline to export baseline/new predictions and select visual examples where the new model is better. |
+| `tools/select_visdrone_comparison_examples.py` | Selects thesis-friendly qualitative examples using GT, baseline predictions, and new-model predictions. |
+| `asserts/` | Figures used by the README or thesis, such as architecture diagrams and ODSSBlock illustrations. |
 
-### 可视化对比工具
+## Current Main Hyperparameters
 
-| 文件 | 作用 |
-| --- | --- |
-| `tools/run_visdrone_comparison_examples.py` | 一键导出 baseline 和新模型结果，并筛选新模型更优的可视化图片。 |
-| `tools/select_visdrone_comparison_examples.py` | 根据 GT、baseline、新模型预测结果自动挑选论文展示样例。 |
-| `asserts/` | 存放论文或 README 用图片，包括模型结构图、检测头流程图、ODSSBlock 示意图等。 |
-
-## 当前主模型关键参数
+These options define `Mamba-YOLO-T-VID-TemporalAdapter-YOLOV-v3`:
 
 ```bash
 --vid_clip_mode window
 --vid_window_size 16
 --num_ref_frames 15
+--temporal_adapter affinity
+--temporal_adapter_time_sigma 4.0
 --temporal_fusion yolov
 --yolov_cls_loss 0.30
 --proposal_topk 700
@@ -145,31 +148,27 @@ python tools/model_variant.py train-command yolov_proposal_v2_2026-05-13 \
 --proposal_vote_gain 0.50
 --proposal_recall_gain 1.25
 --proposal_recall_radius 1
+--fam_warmup_epochs 5
+--fam_alpha_target 0.65
 ```
 
-这些参数共同定义当前 `Mamba-YOLO-T-VID-YOLOV-Proposal-v2`。如果这些参数明显变化，应视为新的实验变体，并新增一个 `model_variants/*.yaml` 记录。
+If these options or the head structure change substantially, treat the result as
+a new experiment variant and create a new `model_variants/*.yaml` record.
 
-## 环境与依赖
+## Experiment Notes
 
-推荐在服务器上执行：
+Recommended comparisons:
 
-```bash
-bash setup.sh
-source .venv/bin/activate
-```
+- Official Mamba-YOLO-T baseline: single-frame Mamba-YOLO.
+- Official YOLOv8 baseline: single-frame YOLOv8.
+- Current new model: Mamba-YOLO-T backbone/neck plus TemporalFeatureAdapter and
+  YOLOV-style proposal head.
+- Ablations: disable `temporal_adapter`, disable `proposal_vote_gain`, disable
+  `proposal_recall_gain`, disable `proposal_after_topk/nms/time/loc`.
 
-如果出现 `No module named cv2`，通常是当前 shell 没进入 `.venv`，或者虚拟环境依赖没有安装完整。
-
-## 论文实验建议
-
-推荐至少保留以下对比：
-
-- 官方 Mamba-YOLO-T baseline：单帧模型。
-- 官方 YOLOv8 baseline：单帧 YOLOv8。
-- 当前新模型：Mamba-YOLO-T backbone/neck + YOLOV-style video head。
-- Ablation：关闭 `proposal_vote_gain`、关闭 `proposal_recall_gain`、关闭 `proposal_after_topk/nms/time/loc` 等。
-
-当前新模型的主要优势是更高 IDP、更少 ID Switches、更少 Frag；主要短板仍是 IDR 和召回。
+The previous best new model improved precision and identity stability. The v3
+adapter is intended to improve recall by enhancing weak current-frame features
+before detection.
 
 ## Acknowledgement
 

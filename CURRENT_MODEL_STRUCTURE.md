@@ -3,32 +3,35 @@
 This file marks the model structure currently used as the main VID experiment
 configuration in this repository.
 
-Last updated: 2026-05-12
+Last updated: 2026-05-13
 
 ## Model Name
 
-**Mamba-YOLO-T-VID with YOLOV-style two-stage proposal temporal refinement**
+**Mamba-YOLO-T-VID with Temporal Feature Adapter and YOLOV-style proposal temporal refinement**
 
 Short name used in notes:
 
 ```text
-Mamba-YOLO-T-VID-YOLOV-Proposal-v2
+Mamba-YOLO-T-VID-TemporalAdapter-YOLOV-v3
 ```
 
 ## Fixed Backbone and Neck
 
-The backbone and neck are kept from the Mamba-YOLO-T detection model:
+The backbone and neck are kept from the official Mamba-YOLO-T detection model:
 
 ```text
 Input video window
   -> frame-wise Mamba-YOLO-T backbone
   -> Mamba-YOLO neck / feature pyramid
+  -> TemporalFeatureAdapter
   -> P3, P4, P5 multi-scale features
 ```
 
-The backbone/neck do not perform explicit temporal fusion. Frames in a video
-window are flattened into a normal image batch, so each frame passes through the
-backbone and neck once.
+The official Mamba-YOLO backbone and neck do not perform explicit temporal
+fusion and are not structurally modified. Frames in a video window are
+flattened into a normal image batch, so each frame passes through the backbone
+and neck once. The new temporal module is inserted after the neck and inside
+`Detect_VID`, before the detect branches run.
 
 ## Current Detection Head Structure
 
@@ -36,6 +39,12 @@ The current main detection head is:
 
 ```text
 Detect_VID Head
+  - TemporalFeatureAdapter
+      - per-scale P3/P4/P5 temporal affinity over the 16-frame window
+      - adjacent-frame reference mask
+      - temporal-distance attention bias
+      - depthwise local spatial context before feature aggregation
+      - residual feature update with alpha warmup
   - Reg branch: cv2 -> bbox distribution
   - Cls branch: cv3_pre -> class logits
   - YOLOV-style ProposalTemporalRefiner
@@ -50,8 +59,9 @@ Detect_VID Head
   - Output: original bbox regression + refined class logits
 ```
 
-The frame-local bbox regression is kept unchanged. Temporal information is used
-mainly to refine class logits and improve video consistency.
+The frame-local bbox regression branch is kept unchanged. Temporal information
+is now used twice: first at feature level by `TemporalFeatureAdapter`, then at
+proposal/class-logit level by `ProposalTemporalRefiner`.
 
 ## Current Main Structural Hyperparameters
 
@@ -61,6 +71,8 @@ These hyperparameters define the current main structure:
 --vid_clip_mode window
 --vid_window_size 16
 --num_ref_frames 15
+--temporal_adapter affinity
+--temporal_adapter_time_sigma 4.0
 --temporal_fusion yolov
 --ref_aux_loss 0.0
 --yolov_cls_loss 0.30
@@ -76,8 +88,8 @@ These hyperparameters define the current main structure:
 --proposal_vote_gain 0.50
 --proposal_recall_gain 1.25
 --proposal_recall_radius 1
---fam_warmup_epochs 3
---fam_alpha_target 0.45
+--fam_warmup_epochs 5
+--fam_alpha_target 0.65
 ```
 
 ## What These Options Mean
@@ -85,14 +97,20 @@ These hyperparameters define the current main structure:
 `vid_clip_mode=window` means the model uses a consecutive video window, and all
 frames in the window are treated as key frames.
 
-`temporal_fusion=yolov` selects the current YOLOV-style proposal temporal
-refinement path. During training, the original detection output is supervised by
-the normal YOLO losses, while the proposal-refined class logits receive an
-additional auxiliary classification loss. During inference and extra evaluation,
-the refined class logits are used as the final class prediction.
+`temporal_adapter=affinity` enables the feature-level temporal adapter. It
+aggregates P3/P4/P5 features across the same 16-frame window before the detect
+branches run. This is inspired by FGFA/SELSA-style video feature aggregation:
+neighboring frames can enhance weak current-frame features before box/class
+prediction.
 
-`proposal_topk` is now the pre-selection proposal count per scale and per
-frame. `proposal_after_topk` controls how many of those candidates enter the
+`temporal_fusion=yolov` selects the YOLOV-style proposal temporal refinement
+path. During training, the original detection output is supervised by the normal
+YOLO losses, while the proposal-refined class logits receive an additional
+auxiliary classification loss. During inference and extra evaluation, the
+refined class logits are used as the final class prediction.
+
+`proposal_topk` is the pre-selection proposal count per scale and per frame.
+`proposal_after_topk` controls how many of those candidates enter the
 cross-frame temporal attention. This follows YOLOV's spirit of selecting a
 larger proposal set first, then aggregating a smaller high-quality proposal
 list.
@@ -103,8 +121,8 @@ selection, reducing repeated low-value neighboring grid points in dense scenes.
 `proposal_spatial_sigma` controls how local cross-frame proposal matching should
 be. Smaller values enforce stronger spatial locality.
 
-`proposal_time_sigma` biases attention toward nearer frames in the 16-frame
-window, while still allowing useful support from farther frames.
+`proposal_time_sigma` biases proposal attention toward nearer frames in the
+16-frame window, while still allowing useful support from farther frames.
 
 `proposal_loc_gain` enables a small learned proposal-location attention bias,
 similar in purpose to YOLOV's location embedding.
@@ -116,9 +134,12 @@ frames can strengthen the current proposal's class logits.
 support to pull low-current-confidence locations into the proposal candidate
 set, which is intended to improve recall.
 
-## Other Supported Head Modes
+`fam_warmup_epochs` and `fam_alpha_target` warm up all temporal residual gates,
+including FAM/proposal refinement and the new feature adapter.
 
-The code also supports other `Detect_VID` modes, but they are not the current
+## Other Supported Modes
+
+The code also supports older `Detect_VID` modes, but they are not the current
 main model structure:
 
 ```text
@@ -131,8 +152,15 @@ logits        -> direct average logits fusion
 logits_gated  -> confidence-gated logits fusion
 ```
 
-For thesis figures and main experiment descriptions, use the `yolov` structure
-above unless a section explicitly describes an ablation.
+The feature adapter can be disabled with:
+
+```bash
+--temporal_adapter none
+```
+
+For thesis figures and main experiment descriptions, use the
+`temporal_adapter + yolov` structure above unless a section explicitly describes
+an ablation.
 
 ## Current Training Command Identity
 
@@ -142,6 +170,8 @@ The current model structure corresponds to commands that include:
 --vid_clip_mode window \
 --vid_window_size 16 \
 --num_ref_frames 15 \
+--temporal_adapter affinity \
+--temporal_adapter_time_sigma 4.0 \
 --temporal_fusion yolov \
 --proposal_after_topk 220 \
 --proposal_nms_radius 1 \
@@ -149,8 +179,11 @@ The current model structure corresponds to commands that include:
 --proposal_loc_gain 0.5 \
 --proposal_vote_gain 0.50 \
 --proposal_recall_gain 1.25 \
---proposal_recall_radius 1
+--proposal_recall_radius 1 \
+--fam_warmup_epochs 5 \
+--fam_alpha_target 0.65
 ```
 
 If these options are changed, the model head structure or behavior should be
 treated as a different experimental variant.
+

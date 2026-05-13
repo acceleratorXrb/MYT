@@ -11,6 +11,14 @@ python tools/model_variant.py train-command yolov_proposal_v2_2026-05-13
 
 ## Current Main Variant
 
+- ID: `temporal_adapter_yolov_v3_2026-05-13`
+- File: `model_variants/temporal_adapter_yolov_v3_2026-05-13.yaml`
+- Summary: Official Mamba-YOLO-T backbone and neck are kept fixed. A new
+  TemporalFeatureAdapter is added before the YOLOV-style proposal head for
+  feature-level video aggregation.
+
+## Previous Main Variant
+
 - ID: `yolov_proposal_v2_2026-05-13`
 - File: `model_variants/yolov_proposal_v2_2026-05-13.yaml`
 - Summary: Mamba-YOLO-T backbone and neck are kept fixed. The Detect_VID head
@@ -20,5 +28,5 @@ python tools/model_variant.py train-command yolov_proposal_v2_2026-05-13
 
 | ID | Date | Backbone/Neck | Temporal Head | Notes |
 | --- | --- | --- | --- | --- |
+| `temporal_adapter_yolov_v3_2026-05-13` | 2026-05-13 | Official Mamba-YOLO-T | TemporalFeatureAdapter + YOLOV-style two-stage proposal refinement | Current main variant. Adds feature-level temporal affinity before the detect branches while preserving the official backbone/neck. |
 | `yolov_proposal_v2_2026-05-13` | 2026-05-13 | Official Mamba-YOLO-T | YOLOV-style two-stage proposal refinement | Current best new-model stage after adding proposal local NMS, after-topk attention, time bias, learned location bias, temporal voting, and recall boost. |
-

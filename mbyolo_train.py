@@ -139,6 +139,10 @@ def build_extra_eval_callback(opt):
                     [
                         "--temporal_fusion",
                         opt.temporal_fusion,
+                        "--temporal_adapter",
+                        opt.temporal_adapter,
+                        "--temporal_adapter_time_sigma",
+                        opt.temporal_adapter_time_sigma,
                         "--fam_conf_boost",
                         opt.fam_conf_boost,
                         "--fam_spatial_sigma",
@@ -231,6 +235,10 @@ def build_extra_eval_callback(opt):
                     [
                         "--temporal_fusion",
                         opt.temporal_fusion,
+                        "--temporal_adapter",
+                        opt.temporal_adapter,
+                        "--temporal_adapter_time_sigma",
+                        opt.temporal_adapter_time_sigma,
                         "--fam_conf_boost",
                         opt.fam_conf_boost,
                         "--fam_spatial_sigma",
@@ -332,6 +340,9 @@ def set_detect_vid_temporal_fusion(
     proposal_nms_radius=None,
     proposal_time_sigma=None,
     proposal_loc_gain=None,
+    temporal_adapter=None,
+    temporal_adapter_time_sigma=None,
+    debug_temporal_adapter=None,
 ):
     """Set Detect_VID temporal fusion options on a YOLO wrapper or raw model."""
     try:
@@ -353,6 +364,15 @@ def set_detect_vid_temporal_fusion(
                     module.fam_conf_boost = float(fam_conf_boost)
                 if temporal_cls_consistency is not None:
                     module.temporal_cls_consistency = float(temporal_cls_consistency)
+                adapter = getattr(module, "temporal_adapter", None)
+                if adapter is not None:
+                    if temporal_adapter is not None:
+                        adapter.enabled = str(temporal_adapter).lower() != "none"
+                    if temporal_adapter_time_sigma is not None:
+                        adapter.time_sigma = float(temporal_adapter_time_sigma)
+                    adapter.num_ref_frames = int(getattr(module, "num_ref_frames", adapter.num_ref_frames))
+                    if debug_temporal_adapter is not None:
+                        adapter.debug_temporal_adapter = bool(debug_temporal_adapter)
                 if fam_spatial_sigma is not None:
                     for fam in getattr(module, "fams", []):
                         fam.spatial_sigma = float(fam_spatial_sigma)
@@ -503,6 +523,8 @@ def parse_opt():
     parser.add_argument('--vid_window_size', type=int, default=None, help='frames per window when --vid_clip_mode window; defaults to num_ref_frames+1')
     parser.add_argument('--ref_aux_loss', type=float, default=0.0, help='auxiliary detection loss weight for reference frames')
     parser.add_argument('--temporal_fusion', default='fam', choices=['fam', 'proposal', 'yolov', 'fam_proposal', 'logits', 'logits_gated', 'none'], help='Detect_VID temporal fusion mode')
+    parser.add_argument('--temporal_adapter', default='none', choices=['none', 'affinity'], help='neck-to-head temporal feature adapter mode')
+    parser.add_argument('--temporal_adapter_time_sigma', type=float, default=4.0, help='temporal Gaussian sigma for the feature adapter attention')
     parser.add_argument('--fam_conf_boost', type=float, default=0.0, help='positive-only ref confidence boost gain for FAM mode')
     parser.add_argument('--fam_spatial_sigma', type=float, default=0.2, help='normalized spatial sigma for local FAM attention; 0 disables')
     parser.add_argument('--proposal_topk', type=int, default=150, help='top-K key/ref locations per scale for YOLOV-style proposal temporal refinement')
@@ -525,6 +547,7 @@ def parse_opt():
     parser.add_argument('--debug_clip_aug', action='store_true', help='print first few VID clip augmentation decisions')
     parser.add_argument('--debug_clip_refs', action='store_true', help='print first few VID key/ref frame paths and positions')
     parser.add_argument('--debug_vid_head', action='store_true', help='print first few Detect_VID temporal head shapes and ref indices')
+    parser.add_argument('--debug_temporal_adapter', action='store_true', help='print first few TemporalFeatureAdapter shapes and ref indices')
     # Optional heavier video metrics, run after checkpoint save every N epochs.
     parser.add_argument('--extra_eval_period', type=int, default=1, help='run flicker/MOT video eval every N epochs; 0 disables')
     parser.add_argument('--extra_eval_official_root', default='datasets/VisDrone-VID/raw/VisDrone2019-VID-val', help='official VisDrone-VID split root with annotations/ and sequences/')
@@ -567,6 +590,8 @@ if __name__ == '__main__':
         "vid_window_size": opt.vid_window_size or 0,
         "ref_aux_loss": opt.ref_aux_loss,
         "temporal_fusion": opt.temporal_fusion,
+        "temporal_adapter": opt.temporal_adapter,
+        "temporal_adapter_time_sigma": opt.temporal_adapter_time_sigma,
         "fam_conf_boost": opt.fam_conf_boost,
         "fam_spatial_sigma": opt.fam_spatial_sigma,
         "proposal_topk": opt.proposal_topk,
@@ -589,6 +614,7 @@ if __name__ == '__main__':
         "debug_clip_aug": opt.debug_clip_aug,
         "debug_clip_refs": opt.debug_clip_refs,
         "debug_vid_head": opt.debug_vid_head,
+        "debug_temporal_adapter": opt.debug_temporal_adapter,
     }
     passthrough = (
         "lr0", "lrf", "momentum", "weight_decay", "warmup_epochs", "warmup_momentum", "warmup_bias_lr",
@@ -626,6 +652,9 @@ if __name__ == '__main__':
         opt.proposal_nms_radius,
         opt.proposal_time_sigma,
         opt.proposal_loc_gain,
+        opt.temporal_adapter,
+        opt.temporal_adapter_time_sigma,
+        opt.debug_temporal_adapter,
     )
     if task == "train":
         if opt.init_weights:
@@ -650,6 +679,9 @@ if __name__ == '__main__':
                 opt.proposal_nms_radius,
                 opt.proposal_time_sigma,
                 opt.proposal_loc_gain,
+                opt.temporal_adapter,
+                opt.temporal_adapter_time_sigma,
+                opt.debug_temporal_adapter,
             )
         if opt.fam_warmup_epochs > 0:
             model.add_callback("on_train_epoch_start", build_fam_warmup_callback(opt))

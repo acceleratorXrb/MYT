@@ -94,6 +94,13 @@ class DetectionTrainer(BaseTrainer):
                 head.fam_conf_boost = float(getattr(self.args, "fam_conf_boost", 0.0) or 0.0)
                 head.temporal_cls_consistency = float(getattr(self.args, "temporal_cls_consistency", 0.0) or 0.0)
                 head.debug_vid_head = bool(getattr(self.args, "debug_vid_head", False))
+                adapter = getattr(head, "temporal_adapter", None)
+                if adapter is not None:
+                    adapter.clip_layout = head.clip_layout
+                    adapter.enabled = str(getattr(self.args, "temporal_adapter", "none") or "none").lower() != "none"
+                    adapter.num_ref_frames = head.num_ref_frames
+                    adapter.time_sigma = float(getattr(self.args, "temporal_adapter_time_sigma", 4.0) or 0.0)
+                    adapter.debug_temporal_adapter = bool(getattr(self.args, "debug_temporal_adapter", False))
                 spatial_sigma = float(getattr(self.args, "fam_spatial_sigma", 0.2) or 0.0)
                 for fam in getattr(head, "fams", []):
                     fam.spatial_sigma = spatial_sigma
