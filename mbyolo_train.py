@@ -147,6 +147,14 @@ def build_extra_eval_callback(opt):
                         opt.temporal_adapter_levels,
                         "--fam_conf_boost",
                         opt.fam_conf_boost,
+                        "--score_smooth_sigma",
+                        opt.score_smooth_sigma,
+                        "--score_smooth_cls_gain",
+                        opt.score_smooth_cls_gain,
+                        "--score_smooth_conf_gain",
+                        opt.score_smooth_conf_gain,
+                        "--score_smooth_min_ref_score",
+                        opt.score_smooth_min_ref_score,
                         "--fam_spatial_sigma",
                         opt.fam_spatial_sigma,
                         "--proposal_topk",
@@ -245,6 +253,14 @@ def build_extra_eval_callback(opt):
                         opt.temporal_adapter_levels,
                         "--fam_conf_boost",
                         opt.fam_conf_boost,
+                        "--score_smooth_sigma",
+                        opt.score_smooth_sigma,
+                        "--score_smooth_cls_gain",
+                        opt.score_smooth_cls_gain,
+                        "--score_smooth_conf_gain",
+                        opt.score_smooth_conf_gain,
+                        "--score_smooth_min_ref_score",
+                        opt.score_smooth_min_ref_score,
                         "--fam_spatial_sigma",
                         opt.fam_spatial_sigma,
                         "--proposal_topk",
@@ -330,6 +346,10 @@ def set_detect_vid_temporal_fusion(
     model,
     mode,
     fam_conf_boost=None,
+    score_smooth_sigma=None,
+    score_smooth_cls_gain=None,
+    score_smooth_conf_gain=None,
+    score_smooth_min_ref_score=None,
     temporal_cls_consistency=None,
     fam_spatial_sigma=None,
     proposal_topk=None,
@@ -367,6 +387,14 @@ def set_detect_vid_temporal_fusion(
                 module.temporal_fusion = mode
                 if fam_conf_boost is not None:
                     module.fam_conf_boost = float(fam_conf_boost)
+                if score_smooth_sigma is not None:
+                    module.score_smooth_sigma = float(score_smooth_sigma)
+                if score_smooth_cls_gain is not None:
+                    module.score_smooth_cls_gain = float(score_smooth_cls_gain)
+                if score_smooth_conf_gain is not None:
+                    module.score_smooth_conf_gain = float(score_smooth_conf_gain)
+                if score_smooth_min_ref_score is not None:
+                    module.score_smooth_min_ref_score = float(score_smooth_min_ref_score)
                 if temporal_cls_consistency is not None:
                     module.temporal_cls_consistency = float(temporal_cls_consistency)
                 adapter = getattr(module, "temporal_adapter", None)
@@ -529,11 +557,15 @@ def parse_opt():
     parser.add_argument('--vid_clip_mode', default='center', choices=['center', 'window'], help='VID training clip layout: center repeats refs; window uses each frame once inside a temporal window')
     parser.add_argument('--vid_window_size', type=int, default=None, help='frames per window when --vid_clip_mode window; defaults to num_ref_frames+1')
     parser.add_argument('--ref_aux_loss', type=float, default=0.0, help='auxiliary detection loss weight for reference frames')
-    parser.add_argument('--temporal_fusion', default='fam', choices=['fam', 'proposal', 'yolov', 'fam_proposal', 'logits', 'logits_gated', 'none'], help='Detect_VID temporal fusion mode')
+    parser.add_argument('--temporal_fusion', default='fam', choices=['fam', 'proposal', 'yolov', 'fam_proposal', 'score_smooth', 'logits', 'logits_gated', 'none'], help='Detect_VID temporal fusion mode')
     parser.add_argument('--temporal_adapter', default='none', choices=['none', 'affinity'], help='neck-to-head temporal feature adapter mode')
     parser.add_argument('--temporal_adapter_time_sigma', type=float, default=4.0, help='temporal Gaussian sigma for the feature adapter attention')
     parser.add_argument('--temporal_adapter_levels', default='all', choices=['all', 'p3', 'p4', 'p5', 'p3p4', 'p4p5', 'none'], help='feature pyramid levels where temporal adapter is applied')
     parser.add_argument('--fam_conf_boost', type=float, default=0.0, help='positive-only ref confidence boost gain for FAM mode')
+    parser.add_argument('--score_smooth_sigma', type=float, default=0.03, help='normalized local radius for score_smooth temporal support')
+    parser.add_argument('--score_smooth_cls_gain', type=float, default=0.5, help='class probability temporal smoothing gain for score_smooth')
+    parser.add_argument('--score_smooth_conf_gain', type=float, default=0.5, help='low-current-confidence temporal boost gain for score_smooth')
+    parser.add_argument('--score_smooth_min_ref_score', type=float, default=0.05, help='minimum reference score used by score_smooth')
     parser.add_argument('--fam_spatial_sigma', type=float, default=0.2, help='normalized spatial sigma for local FAM attention; 0 disables')
     parser.add_argument('--proposal_topk', type=int, default=150, help='top-K key/ref locations per scale for YOLOV-style proposal temporal refinement')
     parser.add_argument('--proposal_spatial_sigma', type=float, default=0.05, help='normalized spatial sigma for proposal temporal attention; 0 disables')
@@ -602,6 +634,10 @@ if __name__ == '__main__':
         "temporal_adapter_time_sigma": opt.temporal_adapter_time_sigma,
         "temporal_adapter_levels": opt.temporal_adapter_levels,
         "fam_conf_boost": opt.fam_conf_boost,
+        "score_smooth_sigma": opt.score_smooth_sigma,
+        "score_smooth_cls_gain": opt.score_smooth_cls_gain,
+        "score_smooth_conf_gain": opt.score_smooth_conf_gain,
+        "score_smooth_min_ref_score": opt.score_smooth_min_ref_score,
         "fam_spatial_sigma": opt.fam_spatial_sigma,
         "proposal_topk": opt.proposal_topk,
         "proposal_spatial_sigma": opt.proposal_spatial_sigma,
@@ -647,6 +683,10 @@ if __name__ == '__main__':
         model,
         opt.temporal_fusion,
         opt.fam_conf_boost,
+        opt.score_smooth_sigma,
+        opt.score_smooth_cls_gain,
+        opt.score_smooth_conf_gain,
+        opt.score_smooth_min_ref_score,
         opt.temporal_cls_consistency,
         opt.fam_spatial_sigma,
         opt.proposal_topk,
@@ -675,6 +715,10 @@ if __name__ == '__main__':
                 model,
                 opt.temporal_fusion,
                 opt.fam_conf_boost,
+                opt.score_smooth_sigma,
+                opt.score_smooth_cls_gain,
+                opt.score_smooth_conf_gain,
+                opt.score_smooth_min_ref_score,
                 opt.temporal_cls_consistency,
                 opt.fam_spatial_sigma,
                 opt.proposal_topk,

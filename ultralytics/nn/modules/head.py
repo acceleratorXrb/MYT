@@ -137,8 +137,12 @@ class Detect_VID(Detect):
             time_sigma=4.0,
             enabled=False,
         )
-        self.temporal_fusion = "fam"  # fam | proposal | yolov | fam_proposal | logits | logits_gated | none
+        self.temporal_fusion = "fam"  # fam | proposal | yolov | fam_proposal | score_smooth | logits | logits_gated | none
         self.fam_conf_boost = 0.0
+        self.score_smooth_sigma = 0.03
+        self.score_smooth_cls_gain = 0.5
+        self.score_smooth_conf_gain = 0.5
+        self.score_smooth_min_ref_score = 0.05
         self.temporal_cls_consistency = 0.0
         self.debug_vid_head = False
         self._debug_vid_head_printed = 0
@@ -166,11 +170,63 @@ class Detect_VID(Detect):
 
     def _fusion_mode(self) -> str:
         mode = str(getattr(self, "temporal_fusion", "fam") or "fam").lower()
-        if mode not in {"fam", "proposal", "yolov", "fam_proposal", "logits", "logits_gated", "none"}:
+        if mode not in {"fam", "proposal", "yolov", "fam_proposal", "score_smooth", "logits", "logits_gated", "none"}:
             raise ValueError(
-                f"temporal_fusion must be fam|proposal|yolov|fam_proposal|logits|logits_gated|none, got {mode!r}"
+                "temporal_fusion must be fam|proposal|yolov|fam_proposal|score_smooth|logits|logits_gated|none, "
+                f"got {mode!r}"
             )
         return mode
+
+    def _score_smooth(self, i: int, key_logits: torch.Tensor, ref_logits: torch.Tensor) -> torch.Tensor:
+        """Lightweight proposal-score smoothing over nearby reference-frame grid cells.
+
+        This intentionally avoids feature attention or bbox updates: current-frame
+        boxes remain unchanged, while class probabilities borrow local temporal
+        support from adjacent frames. It is aimed at reducing class flicker and
+        short low-confidence drops that later break ByteTrack trajectories.
+        """
+        if ref_logits.numel() == 0 or ref_logits.shape[1] == 0:
+            return key_logits
+
+        cls_gain = float(getattr(self, "score_smooth_cls_gain", 0.0) or 0.0)
+        conf_gain = float(getattr(self, "score_smooth_conf_gain", 0.0) or 0.0)
+        if cls_gain <= 0.0 and conf_gain <= 0.0:
+            return key_logits
+
+        B, R, C, H, W = ref_logits.shape
+        key_prob = key_logits.sigmoid()
+        ref_prob = ref_logits.sigmoid()
+        ref_conf = ref_prob.amax(dim=2, keepdim=True)
+
+        min_ref = float(getattr(self, "score_smooth_min_ref_score", 0.0) or 0.0)
+        valid = (ref_conf >= min_ref).to(dtype=ref_prob.dtype)
+        ref_prob = ref_prob * valid
+        ref_conf = ref_conf * valid
+
+        sigma = float(getattr(self, "score_smooth_sigma", 0.0) or 0.0)
+        radius = max(0, int(round(sigma * max(H, W)))) if sigma > 0 else 0
+        if radius > 0:
+            k = radius * 2 + 1
+            ref_prob = F.max_pool2d(ref_prob.reshape(B * R * C, 1, H, W), k, stride=1, padding=radius).view(
+                B, R, C, H, W
+            )
+            ref_conf = F.max_pool2d(ref_conf.reshape(B * R, 1, H, W), k, stride=1, padding=radius).view(B, R, 1, H, W)
+
+        ref_weight = ref_conf / ref_conf.sum(dim=1, keepdim=True).clamp_min(1e-6)
+        ref_mean = (ref_prob * ref_weight).sum(dim=1)
+        ref_support = ref_conf.amax(dim=1)
+
+        alpha = self.fams[i].alpha.to(device=key_logits.device, dtype=key_logits.dtype).clamp(0.0, 1.0)
+        smooth_w = (cls_gain * alpha * ref_support).clamp(0.0, 1.0)
+        out_prob = key_prob * (1.0 - smooth_w) + ref_mean * smooth_w
+
+        if conf_gain > 0.0:
+            key_conf = key_prob.amax(dim=1, keepdim=True)
+            uncertain = 1.0 - key_conf
+            out_prob = out_prob + conf_gain * alpha * torch.relu(ref_mean - key_prob) * uncertain * ref_support
+
+        out_prob = out_prob.clamp(1e-4, 1.0 - 1e-4)
+        return torch.logit(out_prob)
 
     def _logits_fuse(
         self, i: int, key_logits: torch.Tensor, ref_logits: torch.Tensor, gated: bool = False
@@ -271,6 +327,8 @@ class Detect_VID(Detect):
                 cls_out = key_logits
             else:
                 cls_out = refined
+        elif mode == "score_smooth":
+            cls_out = self._score_smooth(i, key_logits, ref_logits)
         elif mode == "logits":
             cls_out = self._logits_fuse(i, key_logits, ref_logits)
         elif mode == "logits_gated":
@@ -362,7 +420,10 @@ class Detect_VID(Detect):
                     "[debug-vid-head] "
                     f"mode=window level={i} B={B} T={T} clip_all_keys={self.clip_all_keys} "
                     f"num_ref_frames={self.num_ref_frames} fusion={self._fusion_mode()} "
-                    f"proposal_topk={getattr(self.proposal_refiners[i], 'topk', None)} "
+                        f"score_smooth_sigma={getattr(self, 'score_smooth_sigma', None)} "
+                        f"score_smooth_cls_gain={getattr(self, 'score_smooth_cls_gain', None)} "
+                        f"score_smooth_conf_gain={getattr(self, 'score_smooth_conf_gain', None)} "
+                        f"proposal_topk={getattr(self.proposal_refiners[i], 'topk', None)} "
                     f"after_topk={getattr(self.proposal_refiners[i], 'after_topk', None)} "
                     f"nms_radius={getattr(self.proposal_refiners[i], 'nms_radius', None)} "
                     f"time_sigma={getattr(self.proposal_refiners[i], 'time_sigma', None)} "
@@ -453,6 +514,8 @@ class Detect_VID(Detect):
                 cls_out = self._cv3_cls(i, pre_full)
             else:
                 cls_out = refined
+        elif mode == "score_smooth":
+            cls_out = self._score_smooth(i, self._cv3_cls(i, pre_full), ref_logits)
         elif mode == "logits":
             cls_out = self._logits_fuse(i, self._cv3_cls(i, pre_full), ref_logits)
         elif mode == "logits_gated":

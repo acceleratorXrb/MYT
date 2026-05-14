@@ -1,0 +1,158 @@
+id: score_smooth_v5_2026-05-14
+date: "2026-05-14"
+name: Mamba-YOLO-T-VID-ScoreSmooth-v5
+status: current_main
+
+constraint:
+  keep_backbone: official Mamba-YOLO-T
+  keep_neck: official Mamba-YOLO-T neck / feature pyramid
+  editable_parts:
+    - VID input window organization
+    - Detect_VID head temporal score smoothing
+    - offline video evaluation path
+
+architecture:
+  input: 16-frame VID window
+  backbone_neck_flow:
+    - flatten window frames into an image batch
+    - run each frame through Mamba-YOLO-T backbone once
+    - run each frame through Mamba-YOLO neck once
+    - keep official backbone/neck topology unchanged
+    - produce P3/P4/P5 features for each frame
+  head:
+    name: Detect_VID
+    regression: unchanged YOLOv8/Mamba-YOLO current-frame bbox distribution branch
+    classification:
+      - raw class logits from cv3_pre and final projection
+      - TemporalScoreSmoother over nearby reference-frame grid cells
+      - smoothed class logits
+    temporal_score_smoother:
+      - no feature-level attention
+      - no proposal transformer
+      - local max-pooled reference class-probability support
+      - class probability smoothing
+      - positive low-confidence score boost
+      - current-frame boxes remain primary
+  output: current-frame bbox regression plus smoothed class logits
+
+main_hyperparameters:
+  vid_clip_mode: window
+  vid_window_size: 16
+  num_ref_frames: 15
+  clip_stride: 1
+  ref_sample: adjacent
+  temporal_adapter: none
+  temporal_fusion: score_smooth
+  ref_aux_loss: 0.0
+  score_smooth_sigma: 0.03
+  score_smooth_cls_gain: 0.60
+  score_smooth_conf_gain: 0.70
+  score_smooth_min_ref_score: 0.03
+  temporal_cls_consistency: 0.0
+  yolov_cls_loss: 0.0
+  fam_warmup_epochs: 5
+  fam_alpha_target: 1.0
+
+training_base:
+  config: ultralytics/cfg/models/mamba-yolo/Mamba-YOLO-T-VID.yaml
+  data: ultralytics/cfg/datasets/VisDrone-VID.yaml
+  data_task: vid
+  init_weights: output_dir/visdrone_vid/baseline/weights/best.pt
+  optimizer: AdamW
+  lr0: 0.0003
+  lrf: 0.01
+  warmup_epochs: 3.0
+  warmup_bias_lr: 0.0003
+  epochs: 30
+  imgsz: 640
+  batch_size: 2
+  workers: 8
+  mosaic: 0.0
+  mixup: 0.0
+
+training_command:
+  - python
+  - mbyolo_train.py
+  - --task
+  - train
+  - --data
+  - ultralytics/cfg/datasets/VisDrone-VID.yaml
+  - --data_task
+  - vid
+  - --config
+  - ultralytics/cfg/models/mamba-yolo/Mamba-YOLO-T-VID.yaml
+  - --init_weights
+  - output_dir/visdrone_vid/baseline/weights/best.pt
+  - --epochs
+  - "30"
+  - --val_period
+  - "1"
+  - --batch_size
+  - "2"
+  - --imgsz
+  - "640"
+  - --workers
+  - "8"
+  - --device
+  - "0"
+  - --optimizer
+  - AdamW
+  - --lr0
+  - "0.0003"
+  - --lrf
+  - "0.01"
+  - --warmup_epochs
+  - "3.0"
+  - --warmup_bias_lr
+  - "0.0003"
+  - --mosaic
+  - "0.0"
+  - --mixup
+  - "0.0"
+  - --vid_clip_mode
+  - window
+  - --vid_window_size
+  - "16"
+  - --num_ref_frames
+  - "15"
+  - --clip_stride
+  - "1"
+  - --ref_sample
+  - adjacent
+  - --temporal_adapter
+  - none
+  - --ref_aux_loss
+  - "0.0"
+  - --temporal_fusion
+  - score_smooth
+  - --score_smooth_sigma
+  - "0.03"
+  - --score_smooth_cls_gain
+  - "0.60"
+  - --score_smooth_conf_gain
+  - "0.70"
+  - --score_smooth_min_ref_score
+  - "0.03"
+  - --temporal_cls_consistency
+  - "0.0"
+  - --yolov_cls_loss
+  - "0.0"
+  - --fam_warmup_epochs
+  - "5"
+  - --fam_alpha_target
+  - "1.0"
+  - --extra_eval_period
+  - "1"
+  - --extra_eval_clip_inference
+  - --extra_eval_window_inference
+  - --extra_eval_official_root
+  - datasets/VisDrone-VID/raw/VisDrone2019-VID-val
+  - --project
+  - output_dir/visdrone_vid
+  - --name
+  - score_smooth_v5
+
+notes:
+  - This variant intentionally removes the heavier temporal adapter and YOLOV proposal refiner from the main path.
+  - The goal is to improve video metrics with a simpler, more explainable score-level temporal stabilizer.
+  - Expected strengths are lower flicker, fewer ID switches, fewer fragments, and better short-gap recall without changing current-frame boxes.

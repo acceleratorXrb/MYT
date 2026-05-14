@@ -5,15 +5,15 @@ object detection. The current research constraint is:
 
 - Keep the official Mamba-YOLO-T backbone and neck unchanged.
 - Add video-specific modules after the neck and inside the detection head.
-- Move the input organization, temporal proposal refinement, and offline video
-  evaluation path toward YOLOV.
+- Move the input organization and offline video evaluation path toward video
+  detection while keeping the temporal head simple and ablation-friendly.
 
 ## Current Main Model
 
 Current variant:
 
 ```text
-Mamba-YOLO-T-VID-P4P5-TemporalAdapter-YOLOV-v4
+Mamba-YOLO-T-VID-ScoreSmooth-v5
 ```
 
 High-level flow:
@@ -22,19 +22,17 @@ High-level flow:
 16-frame video window
   -> official Mamba-YOLO-T backbone
   -> official Mamba-YOLO-T neck / feature pyramid
-  -> TemporalFeatureAdapter on P4/P5, P3 bypassed
   -> Detect_VID
       - YOLOv8-style bbox regression branch
       - raw classification branch
-      - YOLOV-style two-stage ProposalTemporalRefiner
-      - refined class logits
+      - lightweight TemporalScoreSmoother
+      - smoothed class logits
   -> offline VID detections / flicker / MOT-ID metrics
 ```
 
-The official backbone and neck are not structurally modified. The temporal
-feature adapter is added inside `Detect_VID` before the detection branches. In
-the current v4 experiment, P3 is kept untouched to protect small-object detail,
-while P4/P5 receive temporal feature aggregation.
+The official backbone and neck are not structurally modified. The current v5
+experiment keeps the detection structure simple: current-frame boxes remain
+unchanged, while nearby reference frames only smooth and boost class scores.
 
 ## Quick Start
 
@@ -46,16 +44,16 @@ source .venv/bin/activate
 git pull
 git submodule update --init --recursive
 
-python tools/model_variant.py train-command temporal_adapter_p4p5_yolov_v4_2026-05-14 \
-  --name temporal_adapter_p4p5_yolov_v4
+python tools/model_variant.py train-command score_smooth_v5_2026-05-14 \
+  --name score_smooth_v5
 ```
 
 To inspect saved model variants:
 
 ```bash
 python tools/model_variant.py list
-python tools/model_variant.py show temporal_adapter_p4p5_yolov_v4_2026-05-14
-python tools/model_variant.py train-command temporal_adapter_p4p5_yolov_v4_2026-05-14
+python tools/model_variant.py show score_smooth_v5_2026-05-14
+python tools/model_variant.py train-command score_smooth_v5_2026-05-14
 ```
 
 ## Important Files
@@ -78,7 +76,7 @@ python tools/model_variant.py train-command temporal_adapter_p4p5_yolov_v4_2026-
 | `ultralytics/cfg/models/mamba-yolo/Mamba-YOLO-T-VID.yaml` | VID model YAML. It keeps the official Mamba-YOLO-T backbone/neck and uses `Detect_VID`. |
 | `ultralytics/cfg/datasets/VisDrone-VID.yaml` | VisDrone-VID dataset config. |
 | `ultralytics/cfg/default.yaml` | Default Ultralytics arguments, extended with VID, temporal adapter, and proposal-refinement options. |
-| `ultralytics/nn/modules/head.py` | Detection heads. `Detect_VID` is the current video head and owns the temporal adapter plus YOLOV-style proposal refiner. |
+| `ultralytics/nn/modules/head.py` | Detection heads. `Detect_VID` is the current video head and owns the lightweight temporal score smoother plus older ablation modes. |
 | `ultralytics/nn/modules/temporal_adapter.py` | Added feature-level temporal adapter between neck features and detect branches. |
 | `ultralytics/nn/modules/yolov_fam.py` | FAM and YOLOV-style proposal temporal refinement modules. |
 | `ultralytics/models/yolo/detect/train.py` | Passes VID clip layout and temporal options into `Detect_VID` during training. |
@@ -90,7 +88,8 @@ python tools/model_variant.py train-command temporal_adapter_p4p5_yolov_v4_2026-
 | Path | Purpose |
 | --- | --- |
 | `model_variants/README.md` | Explains the model-variant record directory. |
-| `model_variants/temporal_adapter_p4p5_yolov_v4_2026-05-14.yaml` | Current main model record: P4/P5 temporal adapter, key hyperparameters, notes, and training command. |
+| `model_variants/score_smooth_v5_2026-05-14.yaml` | Current main model record: lightweight temporal score smoothing, key hyperparameters, notes, and training command. |
+| `model_variants/temporal_adapter_p4p5_yolov_v4_2026-05-14.yaml` | Previous P4/P5 temporal adapter model record for rollback and ablation. |
 | `model_variants/temporal_adapter_yolov_v3_2026-05-13.yaml` | Previous all-level temporal adapter record for rollback and ablation. |
 | `model_variants/yolov_proposal_v2_2026-05-13.yaml` | Previous YOLOV proposal-only model record for rollback and ablation. |
 | `tools/model_variant.py` | Small utility to list variants, show YAML records, and print stored training commands. |
@@ -144,29 +143,20 @@ git submodule update --init --recursive
 
 ## Current Main Hyperparameters
 
-These options define `Mamba-YOLO-T-VID-P4P5-TemporalAdapter-YOLOV-v4`:
+These options define `Mamba-YOLO-T-VID-ScoreSmooth-v5`:
 
 ```bash
 --vid_clip_mode window
 --vid_window_size 16
 --num_ref_frames 15
---temporal_adapter affinity
---temporal_adapter_time_sigma 4.0
---temporal_adapter_levels p4p5
---temporal_fusion yolov
---yolov_cls_loss 0.30
---proposal_topk 700
---proposal_after_topk 220
---proposal_nms_radius 1
---proposal_spatial_sigma 0.12
---proposal_time_sigma 4.0
---proposal_loc_gain 0.5
---proposal_cls_sim_gain 0.55
---proposal_vote_gain 0.50
---proposal_recall_gain 1.25
---proposal_recall_radius 1
+--temporal_adapter none
+--temporal_fusion score_smooth
+--score_smooth_sigma 0.03
+--score_smooth_cls_gain 0.60
+--score_smooth_conf_gain 0.70
+--score_smooth_min_ref_score 0.03
 --fam_warmup_epochs 5
---fam_alpha_target 0.65
+--fam_alpha_target 1.0
 ```
 
 If these options or the head structure change substantially, treat the result as
@@ -178,14 +168,15 @@ Recommended comparisons:
 
 - Official Mamba-YOLO-T baseline: single-frame Mamba-YOLO.
 - Official YOLOv8 baseline: single-frame YOLOv8.
-- Current new model: Mamba-YOLO-T backbone/neck plus P4/P5 TemporalFeatureAdapter
-  and YOLOV-style proposal head.
-- Ablations: disable `temporal_adapter`, disable `proposal_vote_gain`, disable
-  `proposal_recall_gain`, disable `proposal_after_topk/nms/time/loc`.
+- Current new model: Mamba-YOLO-T backbone/neck plus lightweight temporal score
+  smoothing inside `Detect_VID`.
+- Ablations: disable `score_smooth_conf_gain`, disable `score_smooth_cls_gain`,
+  vary `score_smooth_sigma`, compare against `temporal_fusion none`.
 
-The previous best new model improved precision and identity stability. The v4
-adapter is intended to recover recall by preserving P3 small-object features
-while still enhancing P4/P5 temporal semantics.
+The previous best new model improved precision and identity stability but was
+too complex for the observed gains. The v5 score-smoothing model is intended to
+target video metrics directly with a simpler and more explainable temporal
+module.
 
 ## Acknowledgement
 

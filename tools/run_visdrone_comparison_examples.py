@@ -41,10 +41,14 @@ def parse_args():
     p.add_argument("--clip-stride", type=int, default=1)
     p.add_argument("--ref-sample", default="adjacent", choices=["adjacent", "causal"])
     p.add_argument("--window-size", type=int, default=16)
-    p.add_argument("--temporal-fusion", default="yolov", choices=["fam", "proposal", "yolov", "fam_proposal", "logits", "logits_gated", "none"])
+    p.add_argument("--temporal-fusion", default="score_smooth", choices=["fam", "proposal", "yolov", "fam_proposal", "score_smooth", "logits", "logits_gated", "none"])
     p.add_argument("--temporal-adapter", default="affinity", choices=["none", "affinity"])
     p.add_argument("--temporal-adapter-time-sigma", type=float, default=4.0)
     p.add_argument("--temporal-adapter-levels", default="p4p5", choices=["all", "p3", "p4", "p5", "p3p4", "p4p5", "none"])
+    p.add_argument("--score-smooth-sigma", type=float, default=0.03)
+    p.add_argument("--score-smooth-cls-gain", type=float, default=0.6)
+    p.add_argument("--score-smooth-conf-gain", type=float, default=0.7)
+    p.add_argument("--score-smooth-min-ref-score", type=float, default=0.03)
     p.add_argument("--proposal-topk", type=int, default=700)
     p.add_argument("--proposal-spatial-sigma", type=float, default=0.12)
     p.add_argument("--proposal-cls-sim-gain", type=float, default=0.55)
@@ -138,6 +142,14 @@ def main():
                 args.temporal_adapter_time_sigma,
                 "--temporal_adapter_levels",
                 args.temporal_adapter_levels,
+                "--score_smooth_sigma",
+                args.score_smooth_sigma,
+                "--score_smooth_cls_gain",
+                args.score_smooth_cls_gain,
+                "--score_smooth_conf_gain",
+                args.score_smooth_conf_gain,
+                "--score_smooth_min_ref_score",
+                args.score_smooth_min_ref_score,
                 "--proposal_topk",
                 args.proposal_topk,
                 "--proposal_spatial_sigma",

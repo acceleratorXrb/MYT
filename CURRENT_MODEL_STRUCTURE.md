@@ -7,12 +7,12 @@ Last updated: 2026-05-14
 
 ## Model Name
 
-**Mamba-YOLO-T-VID with P4/P5 Temporal Feature Adapter and YOLOV-style proposal temporal refinement**
+**Mamba-YOLO-T-VID with lightweight temporal score smoothing**
 
 Short name used in notes:
 
 ```text
-Mamba-YOLO-T-VID-P4P5-TemporalAdapter-YOLOV-v4
+Mamba-YOLO-T-VID-ScoreSmooth-v5
 ```
 
 ## Fixed Backbone and Neck
@@ -23,15 +23,14 @@ The backbone and neck are kept from the official Mamba-YOLO-T detection model:
 Input video window
   -> frame-wise Mamba-YOLO-T backbone
   -> Mamba-YOLO neck / feature pyramid
-  -> TemporalFeatureAdapter on P4/P5 only
   -> P3, P4, P5 multi-scale features
 ```
 
 The official Mamba-YOLO backbone and neck do not perform explicit temporal
 fusion and are not structurally modified. Frames in a video window are
 flattened into a normal image batch, so each frame passes through the backbone
-and neck once. The new temporal module is inserted after the neck and inside
-`Detect_VID`, before the detect branches run.
+and neck once. The current temporal module is deliberately simple and is
+inserted inside `Detect_VID` after raw class logits are produced.
 
 ## Current Detection Head Structure
 
@@ -39,31 +38,20 @@ The current main detection head is:
 
 ```text
 Detect_VID Head
-  - TemporalFeatureAdapter
-      - P3 is bypassed to protect small-object responses
-      - P4/P5 temporal affinity over the 16-frame window
-      - adjacent-frame reference mask
-      - temporal-distance attention bias
-      - depthwise local spatial context before feature aggregation
-      - residual feature update with alpha warmup
   - Reg branch: cv2 -> bbox distribution
   - Cls branch: cv3_pre -> class logits
-  - YOLOV-style ProposalTemporalRefiner
-      - pre top-k proposal selection
-      - local proposal NMS
-      - second-stage proposal subset for temporal attention
-      - proposal-center spatial matching plus learned location bias
-      - temporal-distance attention bias
-      - YOLOV-style [support, key] proposal classification refine
-      - temporal class voting
-      - temporal recall boost
-  - Output: original bbox regression + refined class logits
+  - TemporalScoreSmoother
+      - local reference-frame class-probability support
+      - class probability smoothing for nearby grid cells
+      - low-current-confidence positive boost from adjacent frames
+      - no bbox update; current-frame boxes stay primary
+  - Output: original bbox regression + smoothed class logits
 ```
 
 The frame-local bbox regression branch is kept unchanged. Temporal information
-is now used twice: first at feature level by `TemporalFeatureAdapter` on P4/P5,
-then at proposal/class-logit level by `ProposalTemporalRefiner`. P3 remains the
-raw Mamba-YOLO neck output to protect small-object recall.
+is used only at class-score level, which keeps the structure simple and aims
+directly at video metrics such as flicker, ID switches, fragmentation, and
+short confidence drops.
 
 ## Current Main Structural Hyperparameters
 
@@ -73,26 +61,15 @@ These hyperparameters define the current main structure:
 --vid_clip_mode window
 --vid_window_size 16
 --num_ref_frames 15
---temporal_adapter affinity
---temporal_adapter_time_sigma 4.0
---temporal_adapter_levels p4p5
---temporal_fusion yolov
+--temporal_adapter none
+--temporal_fusion score_smooth
 --ref_aux_loss 0.0
---yolov_cls_loss 0.30
---proposal_topk 700
---proposal_after_topk 220
---proposal_nms_radius 1
---proposal_spatial_sigma 0.12
---proposal_time_sigma 4.0
---proposal_loc_gain 0.5
---proposal_cls_sim_gain 0.55
---proposal_reg_sim_gain 0.0
---proposal_score_gain 0.0
---proposal_vote_gain 0.50
---proposal_recall_gain 1.25
---proposal_recall_radius 1
+--score_smooth_sigma 0.03
+--score_smooth_cls_gain 0.60
+--score_smooth_conf_gain 0.70
+--score_smooth_min_ref_score 0.03
 --fam_warmup_epochs 5
---fam_alpha_target 0.65
+--fam_alpha_target 1.0
 ```
 
 ## What These Options Mean
@@ -100,46 +77,22 @@ These hyperparameters define the current main structure:
 `vid_clip_mode=window` means the model uses a consecutive video window, and all
 frames in the window are treated as key frames.
 
-`temporal_adapter=affinity` enables the feature-level temporal adapter. It
-aggregates selected feature pyramid levels across the same 16-frame window
-before the detect branches run. In the current variant,
-`temporal_adapter_levels=p4p5` keeps P3 unchanged and applies feature-level
-temporal aggregation only to P4/P5. This is intended to keep small-object recall
-from P3 while still improving mid/large-object stability and context on P4/P5.
+`temporal_adapter=none` disables the heavier feature-level adapter. This variant
+keeps the official Mamba-YOLO-T backbone and neck unchanged and avoids extra
+feature-fusion complexity.
 
-`temporal_fusion=yolov` selects the YOLOV-style proposal temporal refinement
-path. During training, the original detection output is supervised by the normal
-YOLO losses, while the proposal-refined class logits receive an additional
-auxiliary classification loss. During inference and extra evaluation, the
-refined class logits are used as the final class prediction.
+`temporal_fusion=score_smooth` selects a lightweight score-level temporal module.
+For each frame, nearby grid cells from adjacent reference frames provide class
+probability support. The current-frame bbox branch is not modified.
 
-`proposal_topk` is the pre-selection proposal count per scale and per frame.
-`proposal_after_topk` controls how many of those candidates enter the
-cross-frame temporal attention. This follows YOLOV's spirit of selecting a
-larger proposal set first, then aggregating a smaller high-quality proposal
-list.
-
-`proposal_nms_radius` applies local feature-cell suppression before the top-k
-selection, reducing repeated low-value neighboring grid points in dense scenes.
-
-`proposal_spatial_sigma` controls how local cross-frame proposal matching should
-be. Smaller values enforce stronger spatial locality.
-
-`proposal_time_sigma` biases proposal attention toward nearer frames in the
-16-frame window, while still allowing useful support from farther frames.
-
-`proposal_loc_gain` enables a small learned proposal-location attention bias,
-similar in purpose to YOLOV's location embedding.
-
-`proposal_vote_gain` enables temporal class voting. Nearby proposals in adjacent
-frames can strengthen the current proposal's class logits.
-
-`proposal_recall_gain` and `proposal_recall_radius` allow neighboring-frame
-support to pull low-current-confidence locations into the proposal candidate
-set, which is intended to improve recall.
+`score_smooth_sigma` controls the local feature-cell radius used to borrow
+reference-frame support. `score_smooth_cls_gain` controls how much class
+probabilities are smoothed toward nearby temporal support.
+`score_smooth_conf_gain` controls the positive boost for low-current-confidence
+locations. `score_smooth_min_ref_score` filters weak reference support.
 
 `fam_warmup_epochs` and `fam_alpha_target` warm up all temporal residual gates,
-including FAM/proposal refinement and the new feature adapter.
+including the score smoothing gate.
 
 ## Other Supported Modes
 
@@ -150,8 +103,9 @@ main model structure:
 none          -> single-frame Detect-like head
 fam           -> dense feature aggregation module
 proposal      -> proposal-level class refinement used directly
-yolov         -> current main YOLOV-style proposal auxiliary/refined head
+yolov         -> YOLOV-style proposal auxiliary/refined head
 fam_proposal  -> dense FAM followed by proposal refinement
+score_smooth  -> current lightweight temporal score smoothing head
 logits        -> direct average logits fusion
 logits_gated  -> confidence-gated logits fusion
 ```
@@ -163,7 +117,7 @@ The feature adapter can be disabled with:
 ```
 
 For thesis figures and main experiment descriptions, use the
-`temporal_adapter + yolov` structure above unless a section explicitly describes
+`score_smooth` structure above unless a section explicitly describes
 an ablation.
 
 ## Current Training Command Identity
@@ -174,19 +128,14 @@ The current model structure corresponds to commands that include:
 --vid_clip_mode window \
 --vid_window_size 16 \
 --num_ref_frames 15 \
---temporal_adapter affinity \
---temporal_adapter_time_sigma 4.0 \
---temporal_adapter_levels p4p5 \
---temporal_fusion yolov \
---proposal_after_topk 220 \
---proposal_nms_radius 1 \
---proposal_time_sigma 4.0 \
---proposal_loc_gain 0.5 \
---proposal_vote_gain 0.50 \
---proposal_recall_gain 1.25 \
---proposal_recall_radius 1 \
+--temporal_adapter none \
+--temporal_fusion score_smooth \
+--score_smooth_sigma 0.03 \
+--score_smooth_cls_gain 0.60 \
+--score_smooth_conf_gain 0.70 \
+--score_smooth_min_ref_score 0.03 \
 --fam_warmup_epochs 5 \
---fam_alpha_target 0.65
+--fam_alpha_target 1.0
 ```
 
 If these options are changed, the model head structure or behavior should be
