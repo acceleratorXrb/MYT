@@ -48,7 +48,6 @@ from ultralytics.nn.modules import (
     ResNetLayer,
     RTDETRDecoder,
     Segment,
-    TemporalFeatureAdapter,
     WorldDetect,
     SimpleStem,
     VisionClueMerge,
@@ -936,10 +935,6 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             args = [ch[f]]
         elif m is Concat:
             c2 = sum(ch[x] for x in f)
-        elif m is TemporalFeatureAdapter:
-            in_ch = [ch[x] for x in f]
-            args = [in_ch, *args]
-            c2 = in_ch
         elif m in {Detect, Detect_VID, WorldDetect, Segment, Pose, OBB, ImagePoolingAttn}:
             if isinstance(f, int) and isinstance(ch[f], list):
                 args.append(ch[f])

@@ -30,28 +30,11 @@ def parse_args():
     parser.add_argument("--ref_sample", default="adjacent", choices=["adjacent", "causal"])
     parser.add_argument("--all_keys", action="store_true", help="Infer non-overlapping windows and output every frame once.")
     parser.add_argument("--window_size", type=int, default=16, help="Frames per window when --all_keys is enabled.")
-    parser.add_argument("--temporal_fusion", default=None, choices=["fam", "proposal", "yolov", "fam_proposal", "score_smooth", "logits", "logits_gated", "none"])
-    parser.add_argument("--temporal_adapter", default=None, choices=["none", "affinity"])
-    parser.add_argument("--temporal_adapter_time_sigma", type=float, default=None)
-    parser.add_argument("--temporal_adapter_levels", default=None, choices=["all", "p3", "p4", "p5", "p3p4", "p4p5", "none"])
-    parser.add_argument("--fam_conf_boost", type=float, default=None)
+    parser.add_argument("--temporal_fusion", default=None, choices=["score_smooth", "none"])
     parser.add_argument("--score_smooth_sigma", type=float, default=None)
     parser.add_argument("--score_smooth_cls_gain", type=float, default=None)
     parser.add_argument("--score_smooth_conf_gain", type=float, default=None)
     parser.add_argument("--score_smooth_min_ref_score", type=float, default=None)
-    parser.add_argument("--fam_spatial_sigma", type=float, default=None)
-    parser.add_argument("--proposal_topk", type=int, default=None)
-    parser.add_argument("--proposal_spatial_sigma", type=float, default=None)
-    parser.add_argument("--proposal_cls_sim_gain", type=float, default=None)
-    parser.add_argument("--proposal_reg_sim_gain", type=float, default=None)
-    parser.add_argument("--proposal_score_gain", type=float, default=None)
-    parser.add_argument("--proposal_vote_gain", type=float, default=None)
-    parser.add_argument("--proposal_recall_gain", type=float, default=None)
-    parser.add_argument("--proposal_recall_radius", type=int, default=None)
-    parser.add_argument("--proposal_after_topk", type=int, default=None)
-    parser.add_argument("--proposal_nms_radius", type=int, default=None)
-    parser.add_argument("--proposal_time_sigma", type=float, default=None)
-    parser.add_argument("--proposal_loc_gain", type=float, default=None)
     return parser.parse_args()
 
 
@@ -126,11 +109,6 @@ def set_clip_layout(model, layout, all_keys=False, num_ref_frames=None):
             module.clip_all_keys = bool(all_keys)
             if num_ref_frames is not None:
                 module.num_ref_frames = int(num_ref_frames)
-            adapter = getattr(module, "temporal_adapter", None)
-            if adapter is not None:
-                adapter.clip_layout = layout
-                if num_ref_frames is not None:
-                    adapter.num_ref_frames = int(num_ref_frames)
 
 
 def configure_temporal_options(model, args):
@@ -140,16 +118,6 @@ def configure_temporal_options(model, args):
         if isinstance(module, Detect_VID):
             if args.temporal_fusion is not None:
                 module.temporal_fusion = args.temporal_fusion
-            adapter = getattr(module, "temporal_adapter", None)
-            if adapter is not None:
-                if args.temporal_adapter is not None:
-                    adapter.enabled = args.temporal_adapter != "none"
-                if args.temporal_adapter_time_sigma is not None:
-                    adapter.time_sigma = float(args.temporal_adapter_time_sigma)
-                if args.temporal_adapter_levels is not None:
-                    adapter.levels = args.temporal_adapter_levels
-            if args.fam_conf_boost is not None:
-                module.fam_conf_boost = float(args.fam_conf_boost)
             if args.score_smooth_sigma is not None:
                 module.score_smooth_sigma = float(args.score_smooth_sigma)
             if args.score_smooth_cls_gain is not None:
@@ -158,34 +126,6 @@ def configure_temporal_options(model, args):
                 module.score_smooth_conf_gain = float(args.score_smooth_conf_gain)
             if args.score_smooth_min_ref_score is not None:
                 module.score_smooth_min_ref_score = float(args.score_smooth_min_ref_score)
-            if args.fam_spatial_sigma is not None:
-                for fam in getattr(module, "fams", []):
-                    fam.spatial_sigma = float(args.fam_spatial_sigma)
-            for refiner in getattr(module, "proposal_refiners", []):
-                if args.proposal_topk is not None:
-                    refiner.topk = int(args.proposal_topk)
-                if args.proposal_spatial_sigma is not None:
-                    refiner.spatial_sigma = float(args.proposal_spatial_sigma)
-                if args.proposal_cls_sim_gain is not None:
-                    refiner.cls_sim_gain = float(args.proposal_cls_sim_gain)
-                if args.proposal_reg_sim_gain is not None:
-                    refiner.reg_sim_gain = float(args.proposal_reg_sim_gain)
-                if args.proposal_score_gain is not None:
-                    refiner.score_gain = float(args.proposal_score_gain)
-                if args.proposal_vote_gain is not None:
-                    refiner.vote_gain = float(args.proposal_vote_gain)
-                if args.proposal_recall_gain is not None:
-                    refiner.recall_gain = float(args.proposal_recall_gain)
-                if args.proposal_recall_radius is not None:
-                    refiner.recall_radius = int(args.proposal_recall_radius)
-                if args.proposal_after_topk is not None:
-                    refiner.after_topk = int(args.proposal_after_topk)
-                if args.proposal_nms_radius is not None:
-                    refiner.nms_radius = int(args.proposal_nms_radius)
-                if args.proposal_time_sigma is not None:
-                    refiner.time_sigma = float(args.proposal_time_sigma)
-                if args.proposal_loc_gain is not None:
-                    refiner.loc_gain = float(args.proposal_loc_gain)
 
 
 def load_clip(frame_paths, imgsz, stride, return_all=False):

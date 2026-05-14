@@ -14,8 +14,6 @@ from .block import DFL, BNContrastiveHead, ContrastiveHead, Proto
 from .conv import Conv
 from .transformer import MLP, DeformableTransformerDecoder, DeformableTransformerDecoderLayer
 from .utils import bias_init_with_prob, linear_init
-from .temporal_adapter import TemporalFeatureAdapter
-from .yolov_fam import FeatureAggregationModule, ProposalTemporalRefiner
 
 __all__ = "Detect", "Detect_VID", "Segment", "Pose", "Classify", "OBB", "RTDETRDecoder"
 
@@ -93,99 +91,73 @@ class Detect(nn.Module):
 
 
 class Detect_VID(Detect):
-    """Video Detect head with cross-frame classification feature aggregation.
+    """Mamba-YOLO video head with lightweight temporal score smoothing.
 
-    Inherits Detect, taps the cls branch (`cv3[i]`) between its two Conv blocks
-    and the final 1x1 projection, runs a per-scale FeatureAggregationModule on
-    the pre-projection features, then projects to class logits. Reg branch
-    (`cv2`) is unchanged. The head emits **key-frame only** outputs so the
-    downstream loss/decoder sees a regular YOLOv8-shaped tensor.
-
-    Two forward modes:
-      - Training / clip-mode val: receives `(B*T, C, H, W)` features and reads
-        `self.clip_layout = (B, T)` to slice and aggregate.
-      - Streaming inference: when `self.clip_layout` is None and `self.training`
-        is False, maintains a rolling deque of past `cv3_pre` features per
-        detection level (causal). Call `reset_buffer()` on source change.
+    The backbone and neck are unchanged from Mamba-YOLO. The detection head keeps
+    the center/current-frame box branch untouched and only smooths class scores
+    with nearby frames at the same feature-map neighborhood.
     """
 
     def __init__(self, nc=80, topk=750, conf_thr=0.001, num_ref_frames=4, ch=()):
         super().__init__(nc, ch)
-        c3 = max(ch[0], min(self.nc, 100))  # = cls feature channels per Detect.__init__
-        self.fams = nn.ModuleList(
-            FeatureAggregationModule(
-                cls_channels=c3,
-                num_ref_frames=num_ref_frames,
-                topk=topk,
-                conf_thr=conf_thr,
-            )
-            for _ in ch
-        )
-        self.proposal_refiners = nn.ModuleList(
-            ProposalTemporalRefiner(
-                cls_channels=c3,
-                nc=nc,
-                topk=int(topk),
-                conf_thr=conf_thr,
-            )
-            for _ in ch
-        )
-        self.num_ref_frames = num_ref_frames
-        self.temporal_adapter = TemporalFeatureAdapter(
-            list(ch),
-            num_ref_frames=num_ref_frames,
-            time_sigma=4.0,
-            enabled=False,
-        )
-        self.temporal_fusion = "fam"  # fam | proposal | yolov | fam_proposal | score_smooth | logits | logits_gated | none
-        self.fam_conf_boost = 0.0
+        self.num_ref_frames = int(num_ref_frames)
+        self.temporal_fusion = "score_smooth"
         self.score_smooth_sigma = 0.03
-        self.score_smooth_cls_gain = 0.5
-        self.score_smooth_conf_gain = 0.5
-        self.score_smooth_min_ref_score = 0.05
-        self.temporal_cls_consistency = 0.0
+        self.score_smooth_cls_gain = 0.6
+        self.score_smooth_conf_gain = 0.7
+        self.score_smooth_min_ref_score = float(conf_thr)
+        self.score_smooth_alpha = nn.ParameterList(nn.Parameter(torch.tensor(0.0)) for _ in ch)
         self.debug_vid_head = False
         self._debug_vid_head_printed = 0
-        self.clip_layout: tuple[int, int] | None = None  # (B, T); set by trainer
+        self.clip_layout: tuple[int, int] | None = None
         self.clip_all_keys = False
-        self.aux_outputs: list[torch.Tensor] | None = None  # ref-frame predictions for auxiliary loss
-        self.yolov_cls_outputs: list[torch.Tensor] | None = None  # proposal-refined cls logits for YOLOV-style aux loss
-        self.temporal_consistency_losses: list[torch.Tensor] | None = None
-        # streaming inference buffer (per detection level)
+        self.aux_outputs: list[torch.Tensor] | None = None
         self._stream_buffers: list[list[torch.Tensor]] | None = None
 
     @torch.no_grad()
     def reset_buffer(self) -> None:
-        """Clear the streaming inference buffer; call on video source switch."""
+        """Clear causal streaming buffers on video-source switches."""
         self._stream_buffers = [[] for _ in range(self.nl)] if self.nl else None
 
+    @torch.no_grad()
+    def set_score_smooth_alpha(self, alpha: float) -> None:
+        """Set the residual score-smoothing gate for all feature levels."""
+        for a in self.score_smooth_alpha:
+            a.fill_(float(alpha))
+
     def _cv3_pre(self, i: int, x: torch.Tensor) -> torch.Tensor:
-        """Run the first two Conv blocks of cv3[i] (pre-projection cls feature)."""
         s = self.cv3[i]
         return s[1](s[0](x))
 
     def _cv3_cls(self, i: int, pre: torch.Tensor) -> torch.Tensor:
-        """Run the final 1x1 projection of cv3[i]."""
         return self.cv3[i][2](pre)
 
     def _fusion_mode(self) -> str:
-        mode = str(getattr(self, "temporal_fusion", "fam") or "fam").lower()
-        if mode not in {"fam", "proposal", "yolov", "fam_proposal", "score_smooth", "logits", "logits_gated", "none"}:
-            raise ValueError(
-                "temporal_fusion must be fam|proposal|yolov|fam_proposal|score_smooth|logits|logits_gated|none, "
-                f"got {mode!r}"
-            )
+        mode = str(getattr(self, "temporal_fusion", "score_smooth") or "score_smooth").lower()
+        if mode not in {"score_smooth", "none"}:
+            raise ValueError(f"temporal_fusion must be score_smooth|none, got {mode!r}")
         return mode
 
-    def _score_smooth(self, i: int, key_logits: torch.Tensor, ref_logits: torch.Tensor) -> torch.Tensor:
-        """Lightweight proposal-score smoothing over nearby reference-frame grid cells.
+    def _window_ref_indices(self, key_pos: int, T: int) -> list[int]:
+        """Pick nearest temporal neighbors for one key frame in a window."""
+        n = max(0, int(getattr(self, "num_ref_frames", 0)))
+        if n <= 0 or T <= 1:
+            return []
+        refs = []
+        step = 1
+        while len(refs) < n and step < T + n:
+            for j in (key_pos - step, key_pos + step):
+                j = min(max(j, 0), T - 1)
+                if j != key_pos and j not in refs:
+                    refs.append(j)
+                if len(refs) >= n:
+                    break
+            step += 1
+        return refs
 
-        This intentionally avoids feature attention or bbox updates: current-frame
-        boxes remain unchanged, while class probabilities borrow local temporal
-        support from adjacent frames. It is aimed at reducing class flicker and
-        short low-confidence drops that later break ByteTrack trajectories.
-        """
-        if ref_logits.numel() == 0 or ref_logits.shape[1] == 0:
+    def _score_smooth(self, i: int, key_logits: torch.Tensor, ref_logits: torch.Tensor) -> torch.Tensor:
+        """Smooth class probabilities with local, confidence-weighted temporal support."""
+        if self._fusion_mode() == "none" or ref_logits.numel() == 0 or ref_logits.shape[1] == 0:
             return key_logits
 
         cls_gain = float(getattr(self, "score_smooth_cls_gain", 0.0) or 0.0)
@@ -199,12 +171,13 @@ class Detect_VID(Detect):
         ref_conf = ref_prob.amax(dim=2, keepdim=True)
 
         min_ref = float(getattr(self, "score_smooth_min_ref_score", 0.0) or 0.0)
-        valid = (ref_conf >= min_ref).to(dtype=ref_prob.dtype)
-        ref_prob = ref_prob * valid
-        ref_conf = ref_conf * valid
+        if min_ref > 0.0:
+            valid = (ref_conf >= min_ref).to(ref_prob.dtype)
+            ref_prob = ref_prob * valid
+            ref_conf = ref_conf * valid
 
         sigma = float(getattr(self, "score_smooth_sigma", 0.0) or 0.0)
-        radius = max(0, int(round(sigma * max(H, W)))) if sigma > 0 else 0
+        radius = max(0, int(round(sigma * max(H, W)))) if sigma > 0.0 else 0
         if radius > 0:
             k = radius * 2 + 1
             ref_prob = F.max_pool2d(ref_prob.reshape(B * R * C, 1, H, W), k, stride=1, padding=radius).view(
@@ -215,377 +188,151 @@ class Detect_VID(Detect):
         ref_weight = ref_conf / ref_conf.sum(dim=1, keepdim=True).clamp_min(1e-6)
         ref_mean = (ref_prob * ref_weight).sum(dim=1)
         ref_support = ref_conf.amax(dim=1)
+        alpha = self.score_smooth_alpha[i].to(device=key_logits.device, dtype=key_logits.dtype).clamp(0.0, 1.0)
 
-        alpha = self.fams[i].alpha.to(device=key_logits.device, dtype=key_logits.dtype).clamp(0.0, 1.0)
-        smooth_w = (cls_gain * alpha * ref_support).clamp(0.0, 1.0)
+        smooth_w = (alpha * cls_gain * ref_support).clamp(0.0, 1.0)
         out_prob = key_prob * (1.0 - smooth_w) + ref_mean * smooth_w
 
         if conf_gain > 0.0:
             key_conf = key_prob.amax(dim=1, keepdim=True)
             uncertain = 1.0 - key_conf
-            out_prob = out_prob + conf_gain * alpha * torch.relu(ref_mean - key_prob) * uncertain * ref_support
+            out_prob = out_prob + alpha * conf_gain * torch.relu(ref_mean - key_prob) * uncertain * ref_support
 
-        out_prob = out_prob.clamp(1e-4, 1.0 - 1e-4)
-        return torch.logit(out_prob)
+        return torch.logit(out_prob.clamp(1e-4, 1.0 - 1e-4))
 
-    def _logits_fuse(
-        self, i: int, key_logits: torch.Tensor, ref_logits: torch.Tensor, gated: bool = False
-    ) -> torch.Tensor:
-        """Direct temporal cls-logit fusion for a simple FAM ablation."""
-        if ref_logits.numel() == 0 or ref_logits.shape[1] == 0:
-            return key_logits
-        alpha = self.fams[i].alpha.to(device=key_logits.device, dtype=key_logits.dtype)
-        if not gated:
-            return key_logits + alpha * ref_logits.mean(dim=1)
+    def _aggregate_clip(self, i: int, feat: torch.Tensor) -> torch.Tensor:
+        """Aggregate explicit VID clips/windows."""
+        assert self.clip_layout is not None
+        B, T = self.clip_layout
+        reg_full = self.cv2[i](feat)
+        pre_full = self._cv3_pre(i, feat)
+        cls_full = self._cv3_cls(i, pre_full)
+        if T <= 1 or self.num_ref_frames <= 0 or self._fusion_mode() == "none":
+            return torch.cat((reg_full, cls_full), 1)
 
-        ref_conf = ref_logits.sigmoid().amax(dim=2, keepdim=True)  # (B, R, 1, H, W)
-        ref_weight = ref_conf / ref_conf.sum(dim=1, keepdim=True).clamp_min(1e-6)
-        ref_mean = (ref_logits * ref_weight).sum(dim=1)
-        center_gate = 1.0 - key_logits.sigmoid().amax(dim=1, keepdim=True)
-        return key_logits + alpha * center_gate * ref_mean
-
-    def _ref_conf_boost(self, i: int, key_logits: torch.Tensor, ref_logits: torch.Tensor) -> torch.Tensor:
-        """Positive-only ref confidence compensation for FAM mode.
-
-        This keeps the center-frame logits as the base prediction and only raises
-        classes that adjacent refs support more strongly. It is deliberately
-        asymmetric, so refs cannot suppress a confident center-frame class.
-        """
-        gain = float(getattr(self, "fam_conf_boost", 0.0) or 0.0)
-        if gain <= 0.0 or ref_logits.numel() == 0 or ref_logits.shape[1] == 0:
-            return key_logits
-        alpha = self.fams[i].alpha.to(device=key_logits.device, dtype=key_logits.dtype)
-        ref_prob = ref_logits.sigmoid()
-        ref_conf = ref_prob.amax(dim=2, keepdim=True)
-        ref_weight = ref_conf / ref_conf.sum(dim=1, keepdim=True).clamp_min(1e-6)
-        ref_prob_mean = (ref_prob * ref_weight).sum(dim=1)
-        key_prob = key_logits.sigmoid()
-        center_uncertain = 1.0 - key_prob.amax(dim=1, keepdim=True)
-        boost = torch.relu(ref_prob_mean - key_prob) * center_uncertain
-        return key_logits + gain * alpha * boost
-
-    def _clip_cls_consistency_loss(self, key_logits: torch.Tensor, ref_logits: torch.Tensor) -> torch.Tensor:
-        """Small optional clip-level class-probability consistency regularizer."""
-        gain = float(getattr(self, "temporal_cls_consistency", 0.0) or 0.0)
-        if gain <= 0.0 or ref_logits.numel() == 0 or ref_logits.shape[1] == 0:
-            return key_logits.new_zeros(())
-        key_prob = key_logits.sigmoid()
-        ref_prob = ref_logits.sigmoid().mean(dim=1).detach()
-        with torch.no_grad():
-            key_conf = key_prob.amax(dim=1, keepdim=True)
-            ref_conf = ref_prob.amax(dim=1, keepdim=True)
-            weight = torch.maximum(key_conf, ref_conf).clamp(0.0, 1.0)
-        loss = F.smooth_l1_loss(key_prob, ref_prob, reduction="none").mean(dim=1, keepdim=True)
-        return (loss * weight).sum() / weight.sum().clamp_min(1.0)
-
-    def _window_ref_indices(self, key_pos: int, T: int, num_refs: int) -> list[int]:
-        if T <= 1 or num_refs <= 0:
-            return []
-        left_count = num_refs // 2
-        right_count = num_refs - left_count
-        desired = list(range(key_pos - left_count, key_pos)) + list(range(key_pos + 1, key_pos + right_count + 1))
-        picked = [p for p in desired if 0 <= p < T and p != key_pos]
-        if len(picked) < num_refs:
-            candidates = [p for p in range(T) if p != key_pos and p not in picked]
-            candidates.sort(key=lambda p: (abs(p - key_pos), p))
-            picked.extend(candidates[: num_refs - len(picked)])
-        if len(picked) < num_refs and picked:
-            picked.extend([picked[-1]] * (num_refs - len(picked)))
-        return picked[:num_refs]
-
-    def _window_ref_mask(self, T: int, num_refs: int, device: torch.device) -> torch.Tensor:
-        mask = torch.zeros(T, T, dtype=torch.bool, device=device)
-        for key_pos in range(T):
-            ref_idx = self._window_ref_indices(key_pos, T, num_refs)
-            if ref_idx:
-                mask[key_pos, torch.tensor(ref_idx, device=device, dtype=torch.long)] = True
-        return mask
-
-    def _aggregate_one_key(
-        self,
-        i: int,
-        key_pre: torch.Tensor,
-        key_logits: torch.Tensor,
-        ref_pre: torch.Tensor,
-        ref_logits: torch.Tensor,
-        key_reg: torch.Tensor | None = None,
-        ref_reg: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        mode = self._fusion_mode()
-        if mode in {"fam", "fam_proposal"}:
-            agg_pre = self.fams[i](key_pre, ref_pre, ref_logits)
-            cls_out = self._cv3_cls(i, agg_pre)
-            cls_out = self._ref_conf_boost(i, cls_out, ref_logits)
-            if mode == "fam_proposal":
-                cls_out = self.proposal_refiners[i](agg_pre, cls_out, ref_pre, ref_logits, key_reg, ref_reg)
-        elif mode == "proposal":
-            cls_out = self.proposal_refiners[i](key_pre, key_logits, ref_pre, ref_logits, key_reg, ref_reg)
-        elif mode == "yolov":
-            refined = self.proposal_refiners[i](key_pre, key_logits, ref_pre, ref_logits, key_reg, ref_reg)
-            if self.training and self.yolov_cls_outputs is not None:
-                self.yolov_cls_outputs.append(refined)
-                cls_out = key_logits
-            else:
-                cls_out = refined
-        elif mode == "score_smooth":
-            cls_out = self._score_smooth(i, key_logits, ref_logits)
-        elif mode == "logits":
-            cls_out = self._logits_fuse(i, key_logits, ref_logits)
-        elif mode == "logits_gated":
-            cls_out = self._logits_fuse(i, key_logits, ref_logits, gated=True)
-        else:
-            cls_out = key_logits
-        if self.training and self.temporal_consistency_losses is not None:
-            self.temporal_consistency_losses.append(self._clip_cls_consistency_loss(cls_out, ref_logits))
-        return cls_out
-
-    def _aggregate_clip(
-        self, i: int, x_i: torch.Tensor, B: int, T: int, return_aux: bool = False
-    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor | None]:
-        """Clip-mode: input `(B*T, C, H, W)`, output key-frame `(B, no, H, W)`."""
-        reg_full = self.cv2[i](x_i)                                 # (B*T, 4*reg_max, H, W)
-        pre_full = self._cv3_pre(i, x_i)                            # (B*T, c3, H, W)
-
-        if T <= 1:
-            cls_out = self._cv3_cls(i, pre_full)
-            out = torch.cat((reg_full, cls_out), 1)
-            return (out, None) if return_aux else out
-
-        # reshape to (B, T, ...)
-        Cp, H, W = pre_full.shape[1:]
-        pre_clip = pre_full.view(B, T, Cp, H, W)
-        cls_full = self._cv3_cls(i, pre_full)                       # (B*T, nc, H, W)
+        _, _, H, W = pre_full.shape
         cls_clip = cls_full.view(B, T, self.nc, H, W)
-        Cr = reg_full.shape[1]
-        reg_clip = reg_full.view(B, T, Cr, H, W)
+        reg_clip = reg_full.view(B, T, 4 * self.reg_max, H, W)
 
         if self.clip_all_keys:
-            num_refs = min(int(getattr(self, "num_ref_frames", T - 1)), max(T - 1, 0))
-            ref_debug = []
-            mode = self._fusion_mode()
-            if mode in {"proposal", "yolov"}:
-                for key_pos in range(min(T, 5)):
-                    ref_debug.append((key_pos, self._window_ref_indices(key_pos, T, num_refs)))
-                frame_mask = self._window_ref_mask(T, num_refs, pre_full.device)
-                refined_cls = self.proposal_refiners[i].forward_window(pre_clip, cls_clip, reg_clip, frame_mask)
-                if mode == "yolov" and self.training:
-                    if self.yolov_cls_outputs is not None:
-                        self.yolov_cls_outputs.append(refined_cls.reshape(B * T, self.nc, H, W))
-                    cls_all = cls_clip.reshape(B * T, self.nc, H, W)
-                else:
-                    cls_all = refined_cls.reshape(B * T, self.nc, H, W)
-                out = torch.cat((reg_full, cls_all), 1)
-                if bool(getattr(self, "debug_vid_head", False)) and self._debug_vid_head_printed < 6:
-                    print(
-                        "[debug-vid-head] "
-                        f"mode=window level={i} B={B} T={T} clip_all_keys={self.clip_all_keys} "
-                        f"num_ref_frames={self.num_ref_frames} fusion={mode} proposal_vectorized=True "
-                        f"yolov_aux={mode == 'yolov' and self.training} "
-                        f"proposal_topk={getattr(self.proposal_refiners[i], 'topk', None)} "
-                        f"after_topk={getattr(self.proposal_refiners[i], 'after_topk', None)} "
-                        f"nms_radius={getattr(self.proposal_refiners[i], 'nms_radius', None)} "
-                        f"time_sigma={getattr(self.proposal_refiners[i], 'time_sigma', None)} "
-                        f"loc_gain={getattr(self.proposal_refiners[i], 'loc_gain', None)} ref_debug={ref_debug} "
-                        f"vote={getattr(self.proposal_refiners[i], 'vote_gain', None)} "
-                        f"recall={getattr(self.proposal_refiners[i], 'recall_gain', None)} "
-                        f"pre_shape={tuple(pre_full.shape)} reg_shape={tuple(reg_full.shape)} "
-                        f"out_shape={tuple(out.shape)} aux=None",
-                        flush=True,
-                    )
-                    self._debug_vid_head_printed += 1
-                return (out, None) if return_aux else out
-
             cls_outs = []
-            for key_pos in range(T):
-                ref_idx = self._window_ref_indices(key_pos, T, num_refs)
-                if key_pos < 5:
-                    ref_debug.append((key_pos, ref_idx))
-                if ref_idx:
-                    cls_out = self._aggregate_one_key(
-                        i,
-                        pre_clip[:, key_pos],
-                        cls_clip[:, key_pos],
-                        pre_clip[:, ref_idx],
-                        cls_clip[:, ref_idx],
-                        reg_clip[:, key_pos],
-                        reg_clip[:, ref_idx],
-                    )
-                else:
-                    cls_out = cls_clip[:, key_pos]
-                cls_outs.append(cls_out)
+            ref_debug = [(t, self._window_ref_indices(t, T)) for t in range(min(T, 5))]
+            for t in range(T):
+                refs = self._window_ref_indices(t, T)
+                ref_logits = cls_clip.index_select(1, torch.tensor(refs, device=feat.device)) if refs else cls_clip[:, :0]
+                cls_outs.append(self._score_smooth(i, cls_clip[:, t], ref_logits))
             cls_all = torch.stack(cls_outs, dim=1).reshape(B * T, self.nc, H, W)
             out = torch.cat((reg_full, cls_all), 1)
-            if bool(getattr(self, "debug_vid_head", False)) and self._debug_vid_head_printed < 6:
+            if self.debug_vid_head and self._debug_vid_head_printed < 4:
                 print(
-                    "[debug-vid-head] "
-                    f"mode=window level={i} B={B} T={T} clip_all_keys={self.clip_all_keys} "
-                    f"num_ref_frames={self.num_ref_frames} fusion={self._fusion_mode()} "
-                        f"score_smooth_sigma={getattr(self, 'score_smooth_sigma', None)} "
-                        f"score_smooth_cls_gain={getattr(self, 'score_smooth_cls_gain', None)} "
-                        f"score_smooth_conf_gain={getattr(self, 'score_smooth_conf_gain', None)} "
-                        f"proposal_topk={getattr(self.proposal_refiners[i], 'topk', None)} "
-                    f"after_topk={getattr(self.proposal_refiners[i], 'after_topk', None)} "
-                    f"nms_radius={getattr(self.proposal_refiners[i], 'nms_radius', None)} "
-                    f"time_sigma={getattr(self.proposal_refiners[i], 'time_sigma', None)} "
-                    f"loc_gain={getattr(self.proposal_refiners[i], 'loc_gain', None)} ref_debug={ref_debug} "
-                    f"vote={getattr(self.proposal_refiners[i], 'vote_gain', None)} "
-                    f"recall={getattr(self.proposal_refiners[i], 'recall_gain', None)} "
-                    f"pre_shape={tuple(pre_full.shape)} reg_shape={tuple(reg_full.shape)} "
-                    f"out_shape={tuple(out.shape)} aux=None",
+                    f"[debug-vid-head] mode=window level={i} B={B} T={T} fusion={self._fusion_mode()} "
+                    f"num_ref_frames={self.num_ref_frames} ref_debug={ref_debug} "
+                    f"alpha={float(self.score_smooth_alpha[i].detach().cpu()):.4g} "
+                    f"pre_shape={tuple(pre_full.shape)} out_shape={tuple(out.shape)}",
                     flush=True,
                 )
                 self._debug_vid_head_printed += 1
-            return (out, None) if return_aux else out
+            return out
 
-        key_pre = pre_clip[:, 0]                                    # (B, c3, H, W)
-        ref_pre = pre_clip[:, 1:]                                   # (B, T-1, c3, H, W)
-        ref_logits = cls_clip[:, 1:]                                # (B, T-1, nc, H, W)
-        reg_key = reg_clip[:, 0]                                    # (B, 4*reg_max, H, W)
-        ref_reg = reg_clip[:, 1:]                                   # (B, T-1, 4*reg_max, H, W)
+        key_logits = cls_clip[:, 0]
+        ref_logits = cls_clip[:, 1:]
+        cls_out = self._score_smooth(i, key_logits, ref_logits)
+        out = torch.cat((reg_clip[:, 0], cls_out), 1)
 
-        cls_out = self._aggregate_one_key(i, key_pre, cls_clip[:, 0], ref_pre, ref_logits, reg_key, ref_reg)
-
-        key_out = torch.cat((reg_key, cls_out), 1)
-        if bool(getattr(self, "debug_vid_head", False)) and self._debug_vid_head_printed < 6:
+        if self.training and self.aux_outputs is not None and T > 1:
+            aux = torch.cat(
+                (
+                    reg_clip[:, 1:].reshape(B * (T - 1), -1, H, W),
+                    cls_clip[:, 1:].reshape(B * (T - 1), self.nc, H, W),
+                ),
+                1,
+            )
+            self.aux_outputs.append(aux)
+        if self.debug_vid_head and self._debug_vid_head_printed < 4:
             print(
-                "[debug-vid-head] "
-                f"mode=center level={i} B={B} T={T} clip_all_keys={self.clip_all_keys} "
-                f"num_ref_frames={self.num_ref_frames} fusion={self._fusion_mode()} "
-                f"proposal_topk={getattr(self.proposal_refiners[i], 'topk', None)} "
-                f"after_topk={getattr(self.proposal_refiners[i], 'after_topk', None)} "
-                f"nms_radius={getattr(self.proposal_refiners[i], 'nms_radius', None)} "
-                f"time_sigma={getattr(self.proposal_refiners[i], 'time_sigma', None)} "
-                f"loc_gain={getattr(self.proposal_refiners[i], 'loc_gain', None)} ref_count={ref_pre.shape[1]} "
-                f"vote={getattr(self.proposal_refiners[i], 'vote_gain', None)} "
-                f"recall={getattr(self.proposal_refiners[i], 'recall_gain', None)} "
-                f"pre_shape={tuple(pre_full.shape)} reg_key_shape={tuple(reg_key.shape)} "
-                f"out_shape={tuple(key_out.shape)}",
+                f"[debug-vid-head] mode=center level={i} B={B} T={T} fusion={self._fusion_mode()} "
+                f"ref_count={ref_logits.shape[1]} alpha={float(self.score_smooth_alpha[i].detach().cpu()):.4g} "
+                f"pre_shape={tuple(pre_full.shape)} out_shape={tuple(out.shape)}",
                 flush=True,
             )
             self._debug_vid_head_printed += 1
-        if not return_aux:
-            return key_out
+        return out
 
-        # Auxiliary ref detection uses the same unaggregated branches, so refs
-        # remain supervised as ordinary single-frame detections.
-        ref_reg = reg_clip[:, 1:].reshape(B * (T - 1), Cr, H, W)
-        ref_cls = cls_clip[:, 1:].reshape(B * (T - 1), self.nc, H, W)
-        ref_out = torch.cat((ref_reg, ref_cls), 1)
-        return key_out, ref_out
+    def _aggregate_stream(self, i: int, feat: torch.Tensor) -> torch.Tensor:
+        """Causal score smoothing for plain frame-by-frame inference."""
+        reg_full = self.cv2[i](feat)
+        pre_full = self._cv3_pre(i, feat)
+        cls_full = self._cv3_cls(i, pre_full)
+        B, _, H, W = cls_full.shape
 
-    def _aggregate_stream(self, i: int, x_i: torch.Tensor) -> torch.Tensor:
-        """Streaming-mode: input `(B, C, H, W)` (single frame). Use rolling buffer."""
         if self._stream_buffers is None:
             self.reset_buffer()
-        reg_full = self.cv2[i](x_i)
-        pre_full = self._cv3_pre(i, x_i)
-
+        assert self._stream_buffers is not None
         buf = self._stream_buffers[i]
-        if not buf:
-            cls_out = self._cv3_cls(i, pre_full)
-            buf.append(pre_full.detach())
-            return torch.cat((reg_full, cls_out), 1)
+        max_refs = max(0, int(self.num_ref_frames))
+        ref_count_before = len(buf)
 
-        # Ref features = entire buffer. Predictor letterboxing can change
-        # feature-map shapes between frames, so resize buffered refs to the
-        # current key feature shape before stacking.
-        Hk, Wk = pre_full.shape[-2:]
-        ref_items = [
-            z if z.shape[-2:] == (Hk, Wk) else F.interpolate(z, size=(Hk, Wk), mode="bilinear", align_corners=False)
-            for z in buf
-        ]
-        ref_pre = torch.stack(ref_items, dim=1)                     # (B, R, C, H, W)
-        B, R, Cp, H, W = ref_pre.shape
-        ref_logits = self._cv3_cls(i, ref_pre.view(B * R, Cp, H, W)).view(B, R, self.nc, H, W)
+        if max_refs > 0 and buf and self._fusion_mode() != "none":
+            valid = []
+            for r in buf[-max_refs:]:
+                if r.shape[0] == B:
+                    valid.append(r if r.shape[2:] == (H, W) else F.interpolate(r, size=(H, W), mode="bilinear"))
+            if valid:
+                cls_full = self._score_smooth(i, cls_full, torch.stack(valid, dim=1))
 
-        mode = self._fusion_mode()
-        if mode in {"fam", "fam_proposal"}:
-            agg_pre = self.fams[i](pre_full, ref_pre, ref_logits)
-            cls_out = self._cv3_cls(i, agg_pre)
-            cls_out = self._ref_conf_boost(i, cls_out, ref_logits)
-            if mode == "fam_proposal":
-                cls_out = self.proposal_refiners[i](agg_pre, cls_out, ref_pre, ref_logits, reg_full, None)
-        elif mode == "proposal":
-            cls_out = self.proposal_refiners[i](pre_full, self._cv3_cls(i, pre_full), ref_pre, ref_logits, reg_full, None)
-        elif mode == "yolov":
-            refined = self.proposal_refiners[i](pre_full, self._cv3_cls(i, pre_full), ref_pre, ref_logits, reg_full, None)
-            if self.training and self.yolov_cls_outputs is not None:
-                self.yolov_cls_outputs.append(refined)
-                cls_out = self._cv3_cls(i, pre_full)
-            else:
-                cls_out = refined
-        elif mode == "score_smooth":
-            cls_out = self._score_smooth(i, self._cv3_cls(i, pre_full), ref_logits)
-        elif mode == "logits":
-            cls_out = self._logits_fuse(i, self._cv3_cls(i, pre_full), ref_logits)
-        elif mode == "logits_gated":
-            cls_out = self._logits_fuse(i, self._cv3_cls(i, pre_full), ref_logits, gated=True)
-        else:
-            cls_out = self._cv3_cls(i, pre_full)
+        buf.append(cls_full.detach())
+        if len(buf) > max_refs:
+            del buf[:-max_refs]
 
-        # push current pre into buffer (capped)
-        buf.append(pre_full.detach())
-        if len(buf) > self.num_ref_frames:
-            buf.pop(0)
-        return torch.cat((reg_full, cls_out), 1)
+        out = torch.cat((reg_full, cls_full), 1)
+        if self.debug_vid_head and self._debug_vid_head_printed < 4:
+            print(
+                f"[debug-vid-head] mode=stream level={i} B={B} fusion={self._fusion_mode()} "
+                f"ref_count={ref_count_before} alpha={float(self.score_smooth_alpha[i].detach().cpu()):.4g} "
+                f"out_shape={tuple(out.shape)}",
+                flush=True,
+            )
+            self._debug_vid_head_printed += 1
+        return out
 
     def forward(self, x):
-        """Detect_VID forward: clip-mode if clip_layout set, else streaming."""
-        self.aux_outputs = None
-        self.yolov_cls_outputs = [] if self.training and self._fusion_mode() == "yolov" else None
-        self.temporal_consistency_losses = [] if self.training else None
-        if self.clip_layout is not None:
-            B, T = self.clip_layout
-        else:
-            B, T = x[0].shape[0], 1
+        """Run the VID detection head."""
+        self.aux_outputs = [] if self.training else None
+        T = self.clip_layout[1] if self.clip_layout is not None else 1
+        if self.clip_layout is not None and T <= 1:
+            self.clip_layout = None
 
-        if self.clip_layout is not None and getattr(self.temporal_adapter, "enabled", False):
-            self.temporal_adapter.clip_layout = self.clip_layout
-            self.temporal_adapter.num_ref_frames = int(getattr(self, "num_ref_frames", T - 1))
-            x = self.temporal_adapter(x)
-
-        aux_outputs = []
         for i in range(self.nl):
-            if self.clip_layout is not None or self.training:
-                out = self._aggregate_clip(i, x[i], B, T, return_aux=self.training)
-                if self.training:
-                    x[i], aux_i = out
-                    if aux_i is not None:
-                        aux_outputs.append(aux_i)
-                else:
-                    x[i] = out
-            else:
+            if self.clip_layout is not None:
+                x[i] = self._aggregate_clip(i, x[i])
+            elif not self.training and self.num_ref_frames > 0 and self._fusion_mode() != "none":
                 x[i] = self._aggregate_stream(i, x[i])
-        if self.training and len(aux_outputs) == self.nl:
-            self.aux_outputs = aux_outputs
+            else:
+                x[i] = torch.cat((self.cv2[i](x[i]), self.cv3[i](x[i])), 1)
 
         if self.training:
             return x
 
-        # Inference path — same as Detect but on key-frame-only x[i]
-        shape = x[0].shape  # (B, no, H, W)
+        shape = x[0].shape
         x_cat = torch.cat([xi.view(shape[0], self.no, -1) for xi in x], 2)
         if self.dynamic or self.shape != shape:
-            self.anchors, self.strides = (z.transpose(0, 1) for z in make_anchors(x, self.stride, 0.5))
+            self.anchors, self.strides = (a.transpose(0, 1) for a in make_anchors(x, self.stride, 0.5))
             self.shape = shape
-
         if self.export and self.format in {"saved_model", "pb", "tflite", "edgetpu", "tfjs"}:
             box = x_cat[:, : self.reg_max * 4]
             cls = x_cat[:, self.reg_max * 4 :]
         else:
             box, cls = x_cat.split((self.reg_max * 4, self.nc), 1)
-
         if self.export and self.format in {"tflite", "edgetpu"}:
-            grid_h, grid_w = shape[2], shape[3]
+            grid_h = shape[2]
+            grid_w = shape[3]
             grid_size = torch.tensor([grid_w, grid_h, grid_w, grid_h], device=box.device).reshape(1, 4, 1)
             norm = self.strides / (self.stride[0] * grid_size)
             dbox = self.decode_bboxes(self.dfl(box) * norm, self.anchors.unsqueeze(0) * norm[:, :2])
         else:
             dbox = self.decode_bboxes(self.dfl(box), self.anchors.unsqueeze(0)) * self.strides
-
         y = torch.cat((dbox, cls.sigmoid()), 1)
         return y if self.export else (y, x)
-
 
 class Segment(Detect):
     """YOLOv8 Segment head for segmentation models."""

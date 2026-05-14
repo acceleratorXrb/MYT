@@ -121,7 +121,7 @@ class BaseValidator:
 
                 if isinstance(de_parallel(model).model[-1], Detect_VID):
                     # Detect_VID validation is single-frame but still uses the custom VID head.
-                    # Keep validation in FP32 to avoid half-precision NaNs in Mamba/FAM paths.
+                    # Keep validation in FP32 to avoid half-precision NaNs in Mamba paths.
                     self.args.half = False
                 elif any(
                     m.__class__.__name__ in {"SimpleStem", "VisionClueMerge", "VSSBlock", "XSSBlock"}

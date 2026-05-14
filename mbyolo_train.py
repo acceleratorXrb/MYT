@@ -139,14 +139,6 @@ def build_extra_eval_callback(opt):
                     [
                         "--temporal_fusion",
                         opt.temporal_fusion,
-                        "--temporal_adapter",
-                        opt.temporal_adapter,
-                        "--temporal_adapter_time_sigma",
-                        opt.temporal_adapter_time_sigma,
-                        "--temporal_adapter_levels",
-                        opt.temporal_adapter_levels,
-                        "--fam_conf_boost",
-                        opt.fam_conf_boost,
                         "--score_smooth_sigma",
                         opt.score_smooth_sigma,
                         "--score_smooth_cls_gain",
@@ -155,32 +147,6 @@ def build_extra_eval_callback(opt):
                         opt.score_smooth_conf_gain,
                         "--score_smooth_min_ref_score",
                         opt.score_smooth_min_ref_score,
-                        "--fam_spatial_sigma",
-                        opt.fam_spatial_sigma,
-                        "--proposal_topk",
-                        opt.proposal_topk,
-                        "--proposal_spatial_sigma",
-                        opt.proposal_spatial_sigma,
-                        "--proposal_cls_sim_gain",
-                        opt.proposal_cls_sim_gain,
-                        "--proposal_reg_sim_gain",
-                        opt.proposal_reg_sim_gain,
-                        "--proposal_score_gain",
-                        opt.proposal_score_gain,
-                        "--proposal_vote_gain",
-                        opt.proposal_vote_gain,
-                        "--proposal_recall_gain",
-                        opt.proposal_recall_gain,
-                        "--proposal_recall_radius",
-                        opt.proposal_recall_radius,
-                        "--proposal_after_topk",
-                        opt.proposal_after_topk,
-                        "--proposal_nms_radius",
-                        opt.proposal_nms_radius,
-                        "--proposal_time_sigma",
-                        opt.proposal_time_sigma,
-                        "--proposal_loc_gain",
-                        opt.proposal_loc_gain,
                     ]
                 )
             else:
@@ -245,14 +211,6 @@ def build_extra_eval_callback(opt):
                     [
                         "--temporal_fusion",
                         opt.temporal_fusion,
-                        "--temporal_adapter",
-                        opt.temporal_adapter,
-                        "--temporal_adapter_time_sigma",
-                        opt.temporal_adapter_time_sigma,
-                        "--temporal_adapter_levels",
-                        opt.temporal_adapter_levels,
-                        "--fam_conf_boost",
-                        opt.fam_conf_boost,
                         "--score_smooth_sigma",
                         opt.score_smooth_sigma,
                         "--score_smooth_cls_gain",
@@ -261,32 +219,6 @@ def build_extra_eval_callback(opt):
                         opt.score_smooth_conf_gain,
                         "--score_smooth_min_ref_score",
                         opt.score_smooth_min_ref_score,
-                        "--fam_spatial_sigma",
-                        opt.fam_spatial_sigma,
-                        "--proposal_topk",
-                        opt.proposal_topk,
-                        "--proposal_spatial_sigma",
-                        opt.proposal_spatial_sigma,
-                        "--proposal_cls_sim_gain",
-                        opt.proposal_cls_sim_gain,
-                        "--proposal_reg_sim_gain",
-                        opt.proposal_reg_sim_gain,
-                        "--proposal_score_gain",
-                        opt.proposal_score_gain,
-                        "--proposal_vote_gain",
-                        opt.proposal_vote_gain,
-                        "--proposal_recall_gain",
-                        opt.proposal_recall_gain,
-                        "--proposal_recall_radius",
-                        opt.proposal_recall_radius,
-                        "--proposal_after_topk",
-                        opt.proposal_after_topk,
-                        "--proposal_nms_radius",
-                        opt.proposal_nms_radius,
-                        "--proposal_time_sigma",
-                        opt.proposal_time_sigma,
-                        "--proposal_loc_gain",
-                        opt.proposal_loc_gain,
                     ]
                 )
             steps.append(run_extra_eval_step("export_tracks", track_cmd, strict))
@@ -320,9 +252,9 @@ def build_extra_eval_callback(opt):
     return on_model_save
 
 
-def build_fam_warmup_callback(opt):
-    warmup_epochs = float(opt.fam_warmup_epochs or 0.0)
-    alpha_target = float(opt.fam_alpha_target)
+def build_score_smooth_warmup_callback(opt):
+    warmup_epochs = float(opt.score_smooth_warmup_epochs or 0.0)
+    alpha_target = float(opt.score_smooth_alpha_target)
 
     def on_train_epoch_start(trainer):
         if warmup_epochs <= 0.0:
@@ -333,11 +265,12 @@ def build_fam_warmup_callback(opt):
         denom = max(warmup_epochs - 1.0, 1.0)
         ratio = min(max(epoch / denom, 0.0), 1.0)
         alpha = alpha_target * ratio
-        from ultralytics.nn.modules.yolov_fam import set_alpha_warmup
-
-        set_alpha_warmup(trainer.model, alpha)
+        for module in trainer.model.modules():
+            setter = getattr(module, "set_score_smooth_alpha", None)
+            if callable(setter):
+                setter(alpha)
         if epoch == 0 or epoch == int(warmup_epochs) - 1:
-            print(f"[fam-warmup] epoch={epoch + 1} alpha={alpha:.6g} target={alpha_target}", flush=True)
+            print(f"[score-smooth-warmup] epoch={epoch + 1} alpha={alpha:.6g} target={alpha_target}", flush=True)
 
     return on_train_epoch_start
 
@@ -345,31 +278,12 @@ def build_fam_warmup_callback(opt):
 def set_detect_vid_temporal_fusion(
     model,
     mode,
-    fam_conf_boost=None,
     score_smooth_sigma=None,
     score_smooth_cls_gain=None,
     score_smooth_conf_gain=None,
     score_smooth_min_ref_score=None,
-    temporal_cls_consistency=None,
-    fam_spatial_sigma=None,
-    proposal_topk=None,
-    proposal_spatial_sigma=None,
-    proposal_cls_sim_gain=None,
-    proposal_reg_sim_gain=None,
-    proposal_score_gain=None,
-    proposal_vote_gain=None,
-    proposal_recall_gain=None,
-    proposal_recall_radius=None,
-    proposal_after_topk=None,
-    proposal_nms_radius=None,
-    proposal_time_sigma=None,
-    proposal_loc_gain=None,
-    temporal_adapter=None,
-    temporal_adapter_time_sigma=None,
-    temporal_adapter_levels=None,
-    debug_temporal_adapter=None,
 ):
-    """Set Detect_VID temporal fusion options on a YOLO wrapper or raw model."""
+    """Set Detect_VID score-smoothing options on a YOLO wrapper or raw model."""
     try:
         from ultralytics.nn.modules import Detect_VID
     except Exception:
@@ -385,8 +299,6 @@ def set_detect_vid_temporal_fusion(
         for module in root.modules():
             if isinstance(module, Detect_VID):
                 module.temporal_fusion = mode
-                if fam_conf_boost is not None:
-                    module.fam_conf_boost = float(fam_conf_boost)
                 if score_smooth_sigma is not None:
                     module.score_smooth_sigma = float(score_smooth_sigma)
                 if score_smooth_cls_gain is not None:
@@ -395,50 +307,8 @@ def set_detect_vid_temporal_fusion(
                     module.score_smooth_conf_gain = float(score_smooth_conf_gain)
                 if score_smooth_min_ref_score is not None:
                     module.score_smooth_min_ref_score = float(score_smooth_min_ref_score)
-                if temporal_cls_consistency is not None:
-                    module.temporal_cls_consistency = float(temporal_cls_consistency)
-                adapter = getattr(module, "temporal_adapter", None)
-                if adapter is not None:
-                    if temporal_adapter is not None:
-                        adapter.enabled = str(temporal_adapter).lower() != "none"
-                    if temporal_adapter_time_sigma is not None:
-                        adapter.time_sigma = float(temporal_adapter_time_sigma)
-                    if temporal_adapter_levels is not None:
-                        adapter.levels = str(temporal_adapter_levels)
-                    adapter.num_ref_frames = int(getattr(module, "num_ref_frames", adapter.num_ref_frames))
-                    if debug_temporal_adapter is not None:
-                        adapter.debug_temporal_adapter = bool(debug_temporal_adapter)
-                if fam_spatial_sigma is not None:
-                    for fam in getattr(module, "fams", []):
-                        fam.spatial_sigma = float(fam_spatial_sigma)
-                for refiner in getattr(module, "proposal_refiners", []):
-                    if proposal_topk is not None:
-                        refiner.topk = int(proposal_topk)
-                    if proposal_spatial_sigma is not None:
-                        refiner.spatial_sigma = float(proposal_spatial_sigma)
-                    if proposal_cls_sim_gain is not None:
-                        refiner.cls_sim_gain = float(proposal_cls_sim_gain)
-                    if proposal_reg_sim_gain is not None:
-                        refiner.reg_sim_gain = float(proposal_reg_sim_gain)
-                    if proposal_score_gain is not None:
-                        refiner.score_gain = float(proposal_score_gain)
-                    if proposal_vote_gain is not None:
-                        refiner.vote_gain = float(proposal_vote_gain)
-                    if proposal_recall_gain is not None:
-                        refiner.recall_gain = float(proposal_recall_gain)
-                    if proposal_recall_radius is not None:
-                        refiner.recall_radius = int(proposal_recall_radius)
-                    if proposal_after_topk is not None:
-                        refiner.after_topk = int(proposal_after_topk)
-                    if proposal_nms_radius is not None:
-                        refiner.nms_radius = int(proposal_nms_radius)
-                    if proposal_time_sigma is not None:
-                        refiner.time_sigma = float(proposal_time_sigma)
-                    if proposal_loc_gain is not None:
-                        refiner.loc_gain = float(proposal_loc_gain)
                 count += 1
     return count
-
 
 def resolve_dataset_yaml(path, project, data_task="auto"):
     """Materialize project-local dataset roots as absolute paths for Ultralytics."""
@@ -551,43 +421,23 @@ def parse_opt():
     parser.add_argument('--half', action='store_true', help='use FP16 half-precision inference')
     parser.add_argument('--dnn', action='store_true', help='use OpenCV DNN for ONNX inference')
     # VID clip-mode (consumed by VIDClipDataset when data yaml has task: vid)
-    parser.add_argument('--num_ref_frames', type=int, default=4, help='reference frames per clip for VIDClipDataset (0 disables FAM)')
+    parser.add_argument('--num_ref_frames', type=int, default=4, help='reference frames per clip for VIDClipDataset (0 disables temporal smoothing)')
     parser.add_argument('--clip_stride', type=int, default=1, help='temporal stride between sampled refs')
     parser.add_argument('--ref_sample', default='adjacent', choices=['adjacent', 'causal', 'uniform_local', 'uniform_global'], help='ref-frame sampling strategy')
     parser.add_argument('--vid_clip_mode', default='center', choices=['center', 'window'], help='VID training clip layout: center repeats refs; window uses each frame once inside a temporal window')
     parser.add_argument('--vid_window_size', type=int, default=None, help='frames per window when --vid_clip_mode window; defaults to num_ref_frames+1')
     parser.add_argument('--ref_aux_loss', type=float, default=0.0, help='auxiliary detection loss weight for reference frames')
-    parser.add_argument('--temporal_fusion', default='fam', choices=['fam', 'proposal', 'yolov', 'fam_proposal', 'score_smooth', 'logits', 'logits_gated', 'none'], help='Detect_VID temporal fusion mode')
-    parser.add_argument('--temporal_adapter', default='none', choices=['none', 'affinity'], help='neck-to-head temporal feature adapter mode')
-    parser.add_argument('--temporal_adapter_time_sigma', type=float, default=4.0, help='temporal Gaussian sigma for the feature adapter attention')
-    parser.add_argument('--temporal_adapter_levels', default='all', choices=['all', 'p3', 'p4', 'p5', 'p3p4', 'p4p5', 'none'], help='feature pyramid levels where temporal adapter is applied')
-    parser.add_argument('--fam_conf_boost', type=float, default=0.0, help='positive-only ref confidence boost gain for FAM mode')
+    parser.add_argument('--temporal_fusion', default='score_smooth', choices=['score_smooth', 'none'], help='Detect_VID temporal fusion mode')
     parser.add_argument('--score_smooth_sigma', type=float, default=0.03, help='normalized local radius for score_smooth temporal support')
-    parser.add_argument('--score_smooth_cls_gain', type=float, default=0.5, help='class probability temporal smoothing gain for score_smooth')
-    parser.add_argument('--score_smooth_conf_gain', type=float, default=0.5, help='low-current-confidence temporal boost gain for score_smooth')
-    parser.add_argument('--score_smooth_min_ref_score', type=float, default=0.05, help='minimum reference score used by score_smooth')
-    parser.add_argument('--fam_spatial_sigma', type=float, default=0.2, help='normalized spatial sigma for local FAM attention; 0 disables')
-    parser.add_argument('--proposal_topk', type=int, default=150, help='top-K key/ref locations per scale for YOLOV-style proposal temporal refinement')
-    parser.add_argument('--proposal_spatial_sigma', type=float, default=0.05, help='normalized spatial sigma for proposal temporal attention; 0 disables')
-    parser.add_argument('--proposal_cls_sim_gain', type=float, default=0.5, help='class-probability similarity gain in proposal temporal attention')
-    parser.add_argument('--proposal_reg_sim_gain', type=float, default=0.25, help='box-distribution similarity gain in proposal temporal attention')
-    parser.add_argument('--proposal_score_gain', type=float, default=0.25, help='reference confidence bias gain in proposal temporal attention')
-    parser.add_argument('--proposal_vote_gain', type=float, default=0.0, help='direct temporal class-vote boost gain for proposal refinement')
-    parser.add_argument('--proposal_recall_gain', type=float, default=0.0, help='use neighboring-frame support to add low-current-score proposal candidates')
-    parser.add_argument('--proposal_recall_radius', type=int, default=1, help='feature-cell max-pool radius for temporal recall proposal support')
-    parser.add_argument('--proposal_after_topk', type=int, default=0, help='second-stage proposal count after pre top-K; 0 keeps proposal_topk')
-    parser.add_argument('--proposal_nms_radius', type=int, default=0, help='local feature-cell NMS radius before proposal top-K; 0 disables')
-    parser.add_argument('--proposal_time_sigma', type=float, default=0.0, help='temporal Gaussian sigma for proposal attention; 0 disables')
-    parser.add_argument('--proposal_loc_gain', type=float, default=0.0, help='learned proposal-location attention bias gain; 0 disables')
-    parser.add_argument('--temporal_cls_consistency', type=float, default=0.0, help='optional clip class-consistency loss gain')
-    parser.add_argument('--yolov_cls_loss', type=float, default=0.0, help='YOLOV-style proposal-refined classification auxiliary loss gain')
-    parser.add_argument('--fam_warmup_epochs', type=float, default=0.0, help='linearly warm temporal fusion alpha for this many epochs; 0 disables')
-    parser.add_argument('--fam_alpha_target', type=float, default=1.0, help='target temporal fusion alpha value at the end of warmup')
+    parser.add_argument('--score_smooth_cls_gain', type=float, default=0.6, help='class probability temporal smoothing gain for score_smooth')
+    parser.add_argument('--score_smooth_conf_gain', type=float, default=0.7, help='low-current-confidence temporal boost gain for score_smooth')
+    parser.add_argument('--score_smooth_min_ref_score', type=float, default=0.001, help='minimum reference score used by score_smooth')
+    parser.add_argument('--score_smooth_warmup_epochs', type=float, default=0.0, help='linearly warm score smoothing alpha for this many epochs; 0 disables')
+    parser.add_argument('--score_smooth_alpha_target', type=float, default=1.0, help='target score smoothing alpha value at the end of warmup')
     parser.add_argument('--debug_clip_shape', action='store_true', help='print the first training batch image shape and clip layout')
     parser.add_argument('--debug_clip_aug', action='store_true', help='print first few VID clip augmentation decisions')
     parser.add_argument('--debug_clip_refs', action='store_true', help='print first few VID key/ref frame paths and positions')
     parser.add_argument('--debug_vid_head', action='store_true', help='print first few Detect_VID temporal head shapes and ref indices')
-    parser.add_argument('--debug_temporal_adapter', action='store_true', help='print first few TemporalFeatureAdapter shapes and ref indices')
     # Optional heavier video metrics, run after checkpoint save every N epochs.
     parser.add_argument('--extra_eval_period', type=int, default=1, help='run flicker/MOT video eval every N epochs; 0 disables')
     parser.add_argument('--extra_eval_official_root', default='datasets/VisDrone-VID/raw/VisDrone2019-VID-val', help='official VisDrone-VID split root with annotations/ and sequences/')
@@ -630,36 +480,16 @@ if __name__ == '__main__':
         "vid_window_size": opt.vid_window_size or 0,
         "ref_aux_loss": opt.ref_aux_loss,
         "temporal_fusion": opt.temporal_fusion,
-        "temporal_adapter": opt.temporal_adapter,
-        "temporal_adapter_time_sigma": opt.temporal_adapter_time_sigma,
-        "temporal_adapter_levels": opt.temporal_adapter_levels,
-        "fam_conf_boost": opt.fam_conf_boost,
         "score_smooth_sigma": opt.score_smooth_sigma,
         "score_smooth_cls_gain": opt.score_smooth_cls_gain,
         "score_smooth_conf_gain": opt.score_smooth_conf_gain,
         "score_smooth_min_ref_score": opt.score_smooth_min_ref_score,
-        "fam_spatial_sigma": opt.fam_spatial_sigma,
-        "proposal_topk": opt.proposal_topk,
-        "proposal_spatial_sigma": opt.proposal_spatial_sigma,
-        "proposal_cls_sim_gain": opt.proposal_cls_sim_gain,
-        "proposal_reg_sim_gain": opt.proposal_reg_sim_gain,
-        "proposal_score_gain": opt.proposal_score_gain,
-        "proposal_vote_gain": opt.proposal_vote_gain,
-        "proposal_recall_gain": opt.proposal_recall_gain,
-        "proposal_recall_radius": opt.proposal_recall_radius,
-        "proposal_after_topk": opt.proposal_after_topk,
-        "proposal_nms_radius": opt.proposal_nms_radius,
-        "proposal_time_sigma": opt.proposal_time_sigma,
-        "proposal_loc_gain": opt.proposal_loc_gain,
-        "temporal_cls_consistency": opt.temporal_cls_consistency,
-        "yolov_cls_loss": opt.yolov_cls_loss,
-        "fam_warmup_epochs": opt.fam_warmup_epochs,
-        "fam_alpha_target": opt.fam_alpha_target,
+        "score_smooth_warmup_epochs": opt.score_smooth_warmup_epochs,
+        "score_smooth_alpha_target": opt.score_smooth_alpha_target,
         "debug_clip_shape": opt.debug_clip_shape,
         "debug_clip_aug": opt.debug_clip_aug,
         "debug_clip_refs": opt.debug_clip_refs,
         "debug_vid_head": opt.debug_vid_head,
-        "debug_temporal_adapter": opt.debug_temporal_adapter,
     }
     passthrough = (
         "lr0", "lrf", "momentum", "weight_decay", "warmup_epochs", "warmup_momentum", "warmup_bias_lr",
@@ -679,67 +509,15 @@ if __name__ == '__main__':
             args[k] = True
     model_path = resolve_path(opt.weights) if opt.weights else resolve_path(opt.config)
     model = YOLO(model_path)
-    set_detect_vid_temporal_fusion(
-        model,
-        opt.temporal_fusion,
-        opt.fam_conf_boost,
-        opt.score_smooth_sigma,
-        opt.score_smooth_cls_gain,
-        opt.score_smooth_conf_gain,
-        opt.score_smooth_min_ref_score,
-        opt.temporal_cls_consistency,
-        opt.fam_spatial_sigma,
-        opt.proposal_topk,
-        opt.proposal_spatial_sigma,
-        opt.proposal_cls_sim_gain,
-        opt.proposal_reg_sim_gain,
-        opt.proposal_score_gain,
-        opt.proposal_vote_gain,
-        opt.proposal_recall_gain,
-        opt.proposal_recall_radius,
-        opt.proposal_after_topk,
-        opt.proposal_nms_radius,
-        opt.proposal_time_sigma,
-        opt.proposal_loc_gain,
-        opt.temporal_adapter,
-        opt.temporal_adapter_time_sigma,
-        opt.temporal_adapter_levels,
-        opt.debug_temporal_adapter,
-    )
+    set_detect_vid_temporal_fusion(model, opt.temporal_fusion, opt.score_smooth_sigma, opt.score_smooth_cls_gain, opt.score_smooth_conf_gain, opt.score_smooth_min_ref_score)
     if task == "train":
         if opt.init_weights:
             init_weights = resolve_path(opt.init_weights)
             print(f"[init-weights] loading partial weights from {init_weights}", flush=True)
             model.load(init_weights)
-            set_detect_vid_temporal_fusion(
-                model,
-                opt.temporal_fusion,
-                opt.fam_conf_boost,
-                opt.score_smooth_sigma,
-                opt.score_smooth_cls_gain,
-                opt.score_smooth_conf_gain,
-                opt.score_smooth_min_ref_score,
-                opt.temporal_cls_consistency,
-                opt.fam_spatial_sigma,
-                opt.proposal_topk,
-                opt.proposal_spatial_sigma,
-                opt.proposal_cls_sim_gain,
-                opt.proposal_reg_sim_gain,
-                opt.proposal_score_gain,
-                opt.proposal_vote_gain,
-                opt.proposal_recall_gain,
-                opt.proposal_recall_radius,
-                opt.proposal_after_topk,
-                opt.proposal_nms_radius,
-                opt.proposal_time_sigma,
-                opt.proposal_loc_gain,
-                opt.temporal_adapter,
-                opt.temporal_adapter_time_sigma,
-                opt.temporal_adapter_levels,
-                opt.debug_temporal_adapter,
-            )
-        if opt.fam_warmup_epochs > 0:
-            model.add_callback("on_train_epoch_start", build_fam_warmup_callback(opt))
+            set_detect_vid_temporal_fusion(model, opt.temporal_fusion, opt.score_smooth_sigma, opt.score_smooth_cls_gain, opt.score_smooth_conf_gain, opt.score_smooth_min_ref_score)
+        if opt.score_smooth_warmup_epochs > 0:
+            model.add_callback("on_train_epoch_start", build_score_smooth_warmup_callback(opt))
         if opt.extra_eval_period > 0:
             model.add_callback("on_model_save", build_extra_eval_callback(opt))
         args["resume"] = opt.resume

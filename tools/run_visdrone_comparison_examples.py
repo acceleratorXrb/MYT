@@ -3,7 +3,7 @@
 
 The pipeline runs:
 1. baseline detection export;
-2. new VID-window detection export with the current YOLOV-style head options;
+2. new VID-window detection export with the current score-smoothing head options;
 3. automatic selection of frames where the new model is visually better.
 """
 
@@ -20,7 +20,7 @@ from pathlib import Path
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--baseline-weights", default="output_dir/visdrone_vid/baseline/weights/best.pt")
-    p.add_argument("--new-weights", default="output_dir/visdrone_vid/temporal_adapter_p4p5_yolov_v4/weights/best.pt")
+    p.add_argument("--new-weights", default="output_dir/visdrone_vid/score_smooth_v5/weights/best.pt")
     p.add_argument("--official-root", default="datasets/VisDrone-VID/raw/VisDrone2019-VID-val")
     p.add_argument("--out", default="output_dir/compare_vis")
     p.add_argument("--device", default="0")
@@ -41,26 +41,11 @@ def parse_args():
     p.add_argument("--clip-stride", type=int, default=1)
     p.add_argument("--ref-sample", default="adjacent", choices=["adjacent", "causal"])
     p.add_argument("--window-size", type=int, default=16)
-    p.add_argument("--temporal-fusion", default="score_smooth", choices=["fam", "proposal", "yolov", "fam_proposal", "score_smooth", "logits", "logits_gated", "none"])
-    p.add_argument("--temporal-adapter", default="affinity", choices=["none", "affinity"])
-    p.add_argument("--temporal-adapter-time-sigma", type=float, default=4.0)
-    p.add_argument("--temporal-adapter-levels", default="p4p5", choices=["all", "p3", "p4", "p5", "p3p4", "p4p5", "none"])
+    p.add_argument("--temporal-fusion", default="score_smooth", choices=["score_smooth", "none"])
     p.add_argument("--score-smooth-sigma", type=float, default=0.03)
     p.add_argument("--score-smooth-cls-gain", type=float, default=0.6)
     p.add_argument("--score-smooth-conf-gain", type=float, default=0.7)
-    p.add_argument("--score-smooth-min-ref-score", type=float, default=0.03)
-    p.add_argument("--proposal-topk", type=int, default=700)
-    p.add_argument("--proposal-spatial-sigma", type=float, default=0.12)
-    p.add_argument("--proposal-cls-sim-gain", type=float, default=0.55)
-    p.add_argument("--proposal-reg-sim-gain", type=float, default=0.0)
-    p.add_argument("--proposal-score-gain", type=float, default=0.0)
-    p.add_argument("--proposal-vote-gain", type=float, default=0.50)
-    p.add_argument("--proposal-recall-gain", type=float, default=1.25)
-    p.add_argument("--proposal-recall-radius", type=int, default=1)
-    p.add_argument("--proposal-after-topk", type=int, default=220)
-    p.add_argument("--proposal-nms-radius", type=int, default=1)
-    p.add_argument("--proposal-time-sigma", type=float, default=4.0)
-    p.add_argument("--proposal-loc-gain", type=float, default=0.5)
+    p.add_argument("--score-smooth-min-ref-score", type=float, default=0.001)
     return p.parse_args()
 
 
@@ -136,12 +121,6 @@ def main():
                 args.window_size,
                 "--temporal_fusion",
                 args.temporal_fusion,
-                "--temporal_adapter",
-                args.temporal_adapter,
-                "--temporal_adapter_time_sigma",
-                args.temporal_adapter_time_sigma,
-                "--temporal_adapter_levels",
-                args.temporal_adapter_levels,
                 "--score_smooth_sigma",
                 args.score_smooth_sigma,
                 "--score_smooth_cls_gain",
@@ -150,30 +129,6 @@ def main():
                 args.score_smooth_conf_gain,
                 "--score_smooth_min_ref_score",
                 args.score_smooth_min_ref_score,
-                "--proposal_topk",
-                args.proposal_topk,
-                "--proposal_spatial_sigma",
-                args.proposal_spatial_sigma,
-                "--proposal_cls_sim_gain",
-                args.proposal_cls_sim_gain,
-                "--proposal_reg_sim_gain",
-                args.proposal_reg_sim_gain,
-                "--proposal_score_gain",
-                args.proposal_score_gain,
-                "--proposal_vote_gain",
-                args.proposal_vote_gain,
-                "--proposal_recall_gain",
-                args.proposal_recall_gain,
-                "--proposal_recall_radius",
-                args.proposal_recall_radius,
-                "--proposal_after_topk",
-                args.proposal_after_topk,
-                "--proposal_nms_radius",
-                args.proposal_nms_radius,
-                "--proposal_time_sigma",
-                args.proposal_time_sigma,
-                "--proposal_loc_gain",
-                args.proposal_loc_gain,
             ],
             env,
         )

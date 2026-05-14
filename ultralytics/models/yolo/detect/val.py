@@ -78,16 +78,9 @@ class DetectionValidator(BaseValidator):
                 cl = batch["clip_layout"].view(-1)
                 head.clip_layout = (int(cl[0].item()), int(cl[1].item()))
                 head.score_smooth_sigma = float(getattr(self.args, "score_smooth_sigma", 0.03) or 0.0)
-                head.score_smooth_cls_gain = float(getattr(self.args, "score_smooth_cls_gain", 0.5) or 0.0)
-                head.score_smooth_conf_gain = float(getattr(self.args, "score_smooth_conf_gain", 0.5) or 0.0)
+                head.score_smooth_cls_gain = float(getattr(self.args, "score_smooth_cls_gain", 0.6) or 0.0)
+                head.score_smooth_conf_gain = float(getattr(self.args, "score_smooth_conf_gain", 0.7) or 0.0)
                 head.score_smooth_min_ref_score = float(getattr(self.args, "score_smooth_min_ref_score", 0.05) or 0.0)
-                adapter = getattr(head, "temporal_adapter", None)
-                if adapter is not None:
-                    adapter.clip_layout = head.clip_layout
-                    adapter.enabled = str(getattr(self.args, "temporal_adapter", "none") or "none").lower() != "none"
-                    adapter.num_ref_frames = int(getattr(self.args, "num_ref_frames", getattr(head, "num_ref_frames", 0)))
-                    adapter.time_sigma = float(getattr(self.args, "temporal_adapter_time_sigma", 4.0) or 0.0)
-                    adapter.levels = str(getattr(self.args, "temporal_adapter_levels", "all") or "all")
 
         if self.args.save_hybrid:
             height, width = batch["img"].shape[2:]

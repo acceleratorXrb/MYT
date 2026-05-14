@@ -261,42 +261,6 @@ class v8VIDDetectionLoss(v8DetectionLoss):
         super().__init__(model)
         self.model = model
 
-    def _yolov_cls_aux_loss(self, base_preds, refined_cls, batch):
-        feats = base_preds[1] if isinstance(base_preds, tuple) else base_preds
-        if not refined_cls or len(refined_cls) != len(feats):
-            return feats[0].new_zeros(())
-
-        pred_distri, pred_scores = torch.cat([xi.view(feats[0].shape[0], self.no, -1) for xi in feats], 2).split(
-            (self.reg_max * 4, self.nc), 1
-        )
-        refined_scores = torch.cat([x.view(feats[0].shape[0], self.nc, -1) for x in refined_cls], 2)
-
-        pred_scores = pred_scores.permute(0, 2, 1).contiguous()
-        refined_scores = refined_scores.permute(0, 2, 1).contiguous()
-        pred_distri = pred_distri.permute(0, 2, 1).contiguous()
-
-        dtype = pred_scores.dtype
-        batch_size = pred_scores.shape[0]
-        imgsz = torch.tensor(feats[0].shape[2:], device=self.device, dtype=dtype) * self.stride[0]
-        anchor_points, stride_tensor = make_anchors(feats, self.stride, 0.5)
-
-        targets = torch.cat((batch["batch_idx"].view(-1, 1), batch["cls"].view(-1, 1), batch["bboxes"]), 1)
-        targets = self.preprocess(targets.to(self.device), batch_size, scale_tensor=imgsz[[1, 0, 1, 0]])
-        gt_labels, gt_bboxes = targets.split((1, 4), 2)
-        mask_gt = gt_bboxes.sum(2, keepdim=True).gt_(0)
-        pred_bboxes = self.bbox_decode(anchor_points, pred_distri)
-
-        _, _, target_scores, _, _ = self.assigner(
-            pred_scores.detach().sigmoid(),
-            (pred_bboxes.detach() * stride_tensor).type(gt_bboxes.dtype),
-            anchor_points * stride_tensor,
-            gt_labels,
-            gt_bboxes,
-            mask_gt,
-        )
-        target_scores_sum = max(target_scores.sum(), 1)
-        return self.bce(refined_scores, target_scores.to(dtype)).sum() / target_scores_sum * self.hyp.cls
-
     def __call__(self, preds, batch):
         total_loss, loss_items = super().__call__(preds, batch)
         aux_gain = float(getattr(self.hyp, "ref_aux_loss", 0.0) or 0.0)
@@ -326,29 +290,7 @@ class v8VIDDetectionLoss(v8DetectionLoss):
             else:
                 extra_items.append(zeros)
 
-        cons_gain = float(getattr(self.hyp, "temporal_cls_consistency", 0.0) or 0.0)
-        if cons_gain > 0.0:
-            cons_losses = getattr(head, "temporal_consistency_losses", None)
-            if cons_losses:
-                cons_loss = torch.stack([x for x in cons_losses if x.ndim == 0]).mean()
-                feats = preds[1] if isinstance(preds, tuple) else preds
-                batch_size = feats[0].shape[0]
-                total_loss = total_loss + cons_gain * cons_loss * batch_size
-                extra_items.append((cons_gain * cons_loss.detach()).view(1))
-            else:
-                extra_items.append(loss_items.new_zeros(1))
 
-        yolov_gain = float(getattr(self.hyp, "yolov_cls_loss", 0.0) or 0.0)
-        if yolov_gain > 0.0:
-            refined_cls = getattr(head, "yolov_cls_outputs", None)
-            if refined_cls:
-                yolov_loss = self._yolov_cls_aux_loss(preds, refined_cls, batch)
-                feats = preds[1] if isinstance(preds, tuple) else preds
-                batch_size = feats[0].shape[0]
-                total_loss = total_loss + yolov_gain * yolov_loss * batch_size
-                extra_items.append((yolov_gain * yolov_loss.detach()).view(1))
-            else:
-                extra_items.append(loss_items.new_zeros(1))
 
         if extra_items:
             return total_loss, torch.cat((loss_items, *extra_items))

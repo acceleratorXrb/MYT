@@ -106,8 +106,12 @@ CFG_FLOAT_KEYS = {  # integer or float arguments, i.e. x=2 and x=2.0
     "workspace",
     "batch",
     "ref_aux_loss",
-    "fam_warmup_epochs",
-    "fam_alpha_target",
+    "score_smooth_sigma",
+    "score_smooth_cls_gain",
+    "score_smooth_conf_gain",
+    "score_smooth_min_ref_score",
+    "score_smooth_warmup_epochs",
+    "score_smooth_alpha_target",
 }
 CFG_FRACTION_KEYS = {  # fractional float arguments with 0.0<=values<=1.0
     "dropout",
@@ -149,6 +153,7 @@ CFG_INT_KEYS = {  # integer-only arguments
     "val_period",
     "num_ref_frames",
     "clip_stride",
+    "vid_window_size",
 }
 CFG_BOOL_KEYS = {  # boolean-only arguments
     "save",

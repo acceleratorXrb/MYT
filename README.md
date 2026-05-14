@@ -75,13 +75,11 @@ python tools/model_variant.py train-command score_smooth_v5_2026-05-14
 | --- | --- |
 | `ultralytics/cfg/models/mamba-yolo/Mamba-YOLO-T-VID.yaml` | VID model YAML. It keeps the official Mamba-YOLO-T backbone/neck and uses `Detect_VID`. |
 | `ultralytics/cfg/datasets/VisDrone-VID.yaml` | VisDrone-VID dataset config. |
-| `ultralytics/cfg/default.yaml` | Default Ultralytics arguments, extended with VID, temporal adapter, and proposal-refinement options. |
-| `ultralytics/nn/modules/head.py` | Detection heads. `Detect_VID` is the current video head and owns the lightweight temporal score smoother plus older ablation modes. |
-| `ultralytics/nn/modules/temporal_adapter.py` | Added feature-level temporal adapter between neck features and detect branches. |
-| `ultralytics/nn/modules/yolov_fam.py` | FAM and YOLOV-style proposal temporal refinement modules. |
-| `ultralytics/models/yolo/detect/train.py` | Passes VID clip layout and temporal options into `Detect_VID` during training. |
-| `ultralytics/models/yolo/detect/val.py` | Passes VID clip layout and temporal options during validation. |
-| `ultralytics/utils/loss.py` | YOLO detection losses plus VID auxiliary losses, including YOLOV-style refined-class auxiliary loss. |
+| `ultralytics/cfg/default.yaml` | Default Ultralytics arguments, extended with VID window and score-smoothing options. |
+| `ultralytics/nn/modules/head.py` | Detection heads. `Detect_VID` is the current video head and owns the lightweight temporal score smoother. |
+| `ultralytics/models/yolo/detect/train.py` | Passes VID clip layout and score-smoothing options into `Detect_VID` during training. |
+| `ultralytics/models/yolo/detect/val.py` | Passes VID clip layout and score-smoothing options during validation. |
+| `ultralytics/utils/loss.py` | YOLO detection losses plus the optional VID reference-frame auxiliary loss. |
 
 ### Model Variant Records
 
@@ -149,14 +147,13 @@ These options define `Mamba-YOLO-T-VID-ScoreSmooth-v5`:
 --vid_clip_mode window
 --vid_window_size 16
 --num_ref_frames 15
---temporal_adapter none
 --temporal_fusion score_smooth
 --score_smooth_sigma 0.03
 --score_smooth_cls_gain 0.60
 --score_smooth_conf_gain 0.70
---score_smooth_min_ref_score 0.03
---fam_warmup_epochs 5
---fam_alpha_target 1.0
+--score_smooth_min_ref_score 0.001
+--score_smooth_warmup_epochs 5
+--score_smooth_alpha_target 1.0
 ```
 
 If these options or the head structure change substantially, treat the result as

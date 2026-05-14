@@ -61,25 +61,20 @@ These hyperparameters define the current main structure:
 --vid_clip_mode window
 --vid_window_size 16
 --num_ref_frames 15
---temporal_adapter none
 --temporal_fusion score_smooth
 --ref_aux_loss 0.0
 --score_smooth_sigma 0.03
 --score_smooth_cls_gain 0.60
 --score_smooth_conf_gain 0.70
---score_smooth_min_ref_score 0.03
---fam_warmup_epochs 5
---fam_alpha_target 1.0
+--score_smooth_min_ref_score 0.001
+--score_smooth_warmup_epochs 5
+--score_smooth_alpha_target 1.0
 ```
 
 ## What These Options Mean
 
 `vid_clip_mode=window` means the model uses a consecutive video window, and all
 frames in the window are treated as key frames.
-
-`temporal_adapter=none` disables the heavier feature-level adapter. This variant
-keeps the official Mamba-YOLO-T backbone and neck unchanged and avoids extra
-feature-fusion complexity.
 
 `temporal_fusion=score_smooth` selects a lightweight score-level temporal module.
 For each frame, nearby grid cells from adjacent reference frames provide class
@@ -91,29 +86,16 @@ probabilities are smoothed toward nearby temporal support.
 `score_smooth_conf_gain` controls the positive boost for low-current-confidence
 locations. `score_smooth_min_ref_score` filters weak reference support.
 
-`fam_warmup_epochs` and `fam_alpha_target` warm up all temporal residual gates,
-including the score smoothing gate.
+`score_smooth_warmup_epochs` and `score_smooth_alpha_target` warm up the score
+smoothing residual gate.
 
-## Other Supported Modes
+## Supported Modes
 
-The code also supports older `Detect_VID` modes, but they are not the current
-main model structure:
+The current code intentionally supports only two `Detect_VID` modes:
 
 ```text
-none          -> single-frame Detect-like head
-fam           -> dense feature aggregation module
-proposal      -> proposal-level class refinement used directly
-yolov         -> YOLOV-style proposal auxiliary/refined head
-fam_proposal  -> dense FAM followed by proposal refinement
 score_smooth  -> current lightweight temporal score smoothing head
-logits        -> direct average logits fusion
-logits_gated  -> confidence-gated logits fusion
-```
-
-The feature adapter can be disabled with:
-
-```bash
---temporal_adapter none
+none          -> single-frame Detect-like head for ablation
 ```
 
 For thesis figures and main experiment descriptions, use the
@@ -128,14 +110,13 @@ The current model structure corresponds to commands that include:
 --vid_clip_mode window \
 --vid_window_size 16 \
 --num_ref_frames 15 \
---temporal_adapter none \
 --temporal_fusion score_smooth \
 --score_smooth_sigma 0.03 \
 --score_smooth_cls_gain 0.60 \
 --score_smooth_conf_gain 0.70 \
---score_smooth_min_ref_score 0.03 \
---fam_warmup_epochs 5 \
---fam_alpha_target 1.0
+--score_smooth_min_ref_score 0.001 \
+--score_smooth_warmup_epochs 5 \
+--score_smooth_alpha_target 1.0
 ```
 
 If these options are changed, the model head structure or behavior should be

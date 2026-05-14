@@ -41,17 +41,14 @@ main_hyperparameters:
   num_ref_frames: 15
   clip_stride: 1
   ref_sample: adjacent
-  temporal_adapter: none
   temporal_fusion: score_smooth
   ref_aux_loss: 0.0
   score_smooth_sigma: 0.03
   score_smooth_cls_gain: 0.60
   score_smooth_conf_gain: 0.70
-  score_smooth_min_ref_score: 0.03
-  temporal_cls_consistency: 0.0
-  yolov_cls_loss: 0.0
-  fam_warmup_epochs: 5
-  fam_alpha_target: 1.0
+  score_smooth_min_ref_score: 0.001
+  score_smooth_warmup_epochs: 5
+  score_smooth_alpha_target: 1.0
 
 training_base:
   config: ultralytics/cfg/models/mamba-yolo/Mamba-YOLO-T-VID.yaml
@@ -119,8 +116,6 @@ training_command:
   - "1"
   - --ref_sample
   - adjacent
-  - --temporal_adapter
-  - none
   - --ref_aux_loss
   - "0.0"
   - --temporal_fusion
@@ -132,14 +127,10 @@ training_command:
   - --score_smooth_conf_gain
   - "0.70"
   - --score_smooth_min_ref_score
-  - "0.03"
-  - --temporal_cls_consistency
-  - "0.0"
-  - --yolov_cls_loss
-  - "0.0"
-  - --fam_warmup_epochs
+  - "0.001"
+  - --score_smooth_warmup_epochs
   - "5"
-  - --fam_alpha_target
+  - --score_smooth_alpha_target
   - "1.0"
   - --extra_eval_period
   - "1"

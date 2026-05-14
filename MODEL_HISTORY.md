@@ -20,6 +20,10 @@ python tools/model_variant.py train-command score_smooth_v5_2026-05-14
 
 ## Previous Main Variant
 
+These older variants are kept as experiment records. Their removed modules are
+not part of the current active code path; use the corresponding historical Git
+commit if an exact rerun is needed.
+
 - ID: `temporal_adapter_p4p5_yolov_v4_2026-05-14`
 - File: `model_variants/temporal_adapter_p4p5_yolov_v4_2026-05-14.yaml`
 - Summary: Official Mamba-YOLO-T backbone and neck are kept fixed. A

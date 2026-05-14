@@ -90,50 +90,12 @@ class DetectionTrainer(BaseTrainer):
                 head.clip_layout = (int(cl[0].item()), int(cl[1].item()))
                 head.clip_all_keys = bool(int(batch.get("clip_all_keys", torch.tensor([0], device=self.device)).view(-1)[0].item()))
                 head.num_ref_frames = int(getattr(self.args, "num_ref_frames", head.num_ref_frames))
-                head.temporal_fusion = getattr(self.args, "temporal_fusion", "fam")
-                head.fam_conf_boost = float(getattr(self.args, "fam_conf_boost", 0.0) or 0.0)
+                head.temporal_fusion = getattr(self.args, "temporal_fusion", "score_smooth")
                 head.score_smooth_sigma = float(getattr(self.args, "score_smooth_sigma", 0.03) or 0.0)
-                head.score_smooth_cls_gain = float(getattr(self.args, "score_smooth_cls_gain", 0.5) or 0.0)
-                head.score_smooth_conf_gain = float(getattr(self.args, "score_smooth_conf_gain", 0.5) or 0.0)
+                head.score_smooth_cls_gain = float(getattr(self.args, "score_smooth_cls_gain", 0.6) or 0.0)
+                head.score_smooth_conf_gain = float(getattr(self.args, "score_smooth_conf_gain", 0.7) or 0.0)
                 head.score_smooth_min_ref_score = float(getattr(self.args, "score_smooth_min_ref_score", 0.05) or 0.0)
-                head.temporal_cls_consistency = float(getattr(self.args, "temporal_cls_consistency", 0.0) or 0.0)
                 head.debug_vid_head = bool(getattr(self.args, "debug_vid_head", False))
-                adapter = getattr(head, "temporal_adapter", None)
-                if adapter is not None:
-                    adapter.clip_layout = head.clip_layout
-                    adapter.enabled = str(getattr(self.args, "temporal_adapter", "none") or "none").lower() != "none"
-                    adapter.num_ref_frames = head.num_ref_frames
-                    adapter.time_sigma = float(getattr(self.args, "temporal_adapter_time_sigma", 4.0) or 0.0)
-                    adapter.levels = str(getattr(self.args, "temporal_adapter_levels", "all") or "all")
-                    adapter.debug_temporal_adapter = bool(getattr(self.args, "debug_temporal_adapter", False))
-                spatial_sigma = float(getattr(self.args, "fam_spatial_sigma", 0.2) or 0.0)
-                for fam in getattr(head, "fams", []):
-                    fam.spatial_sigma = spatial_sigma
-                proposal_topk = int(getattr(self.args, "proposal_topk", 150) or 150)
-                proposal_sigma = float(getattr(self.args, "proposal_spatial_sigma", 0.05) or 0.0)
-                proposal_cls_gain = float(getattr(self.args, "proposal_cls_sim_gain", 0.5) or 0.0)
-                proposal_reg_gain = float(getattr(self.args, "proposal_reg_sim_gain", 0.25) or 0.0)
-                proposal_score_gain = float(getattr(self.args, "proposal_score_gain", 0.25) or 0.0)
-                proposal_vote_gain = float(getattr(self.args, "proposal_vote_gain", 0.0) or 0.0)
-                proposal_recall_gain = float(getattr(self.args, "proposal_recall_gain", 0.0) or 0.0)
-                proposal_recall_radius = int(getattr(self.args, "proposal_recall_radius", 1) or 0)
-                proposal_after_topk = int(getattr(self.args, "proposal_after_topk", 0) or 0)
-                proposal_nms_radius = int(getattr(self.args, "proposal_nms_radius", 0) or 0)
-                proposal_time_sigma = float(getattr(self.args, "proposal_time_sigma", 0.0) or 0.0)
-                proposal_loc_gain = float(getattr(self.args, "proposal_loc_gain", 0.0) or 0.0)
-                for refiner in getattr(head, "proposal_refiners", []):
-                    refiner.topk = proposal_topk
-                    refiner.spatial_sigma = proposal_sigma
-                    refiner.cls_sim_gain = proposal_cls_gain
-                    refiner.reg_sim_gain = proposal_reg_gain
-                    refiner.score_gain = proposal_score_gain
-                    refiner.vote_gain = proposal_vote_gain
-                    refiner.recall_gain = proposal_recall_gain
-                    refiner.recall_radius = proposal_recall_radius
-                    refiner.after_topk = proposal_after_topk
-                    refiner.nms_radius = proposal_nms_radius
-                    refiner.time_sigma = proposal_time_sigma
-                    refiner.loc_gain = proposal_loc_gain
         if getattr(self.args, "debug_clip_shape", False) and not getattr(self, "_debug_clip_shape_printed", False):
             clip_layout = batch.get("clip_layout")
             if hasattr(clip_layout, "detach"):
@@ -185,10 +147,6 @@ class DetectionTrainer(BaseTrainer):
                 and float(getattr(self.args, "ref_aux_loss", 0.0) or 0.0) > 0.0
             ):
                 loss_names.extend(["ref_box_loss", "ref_cls_loss", "ref_dfl_loss"])
-            if float(getattr(self.args, "temporal_cls_consistency", 0.0) or 0.0) > 0.0:
-                loss_names.append("temporal_cls_loss")
-            if float(getattr(self.args, "yolov_cls_loss", 0.0) or 0.0) > 0.0:
-                loss_names.append("yolov_cls_loss")
         self.loss_names = tuple(loss_names)
         return yolo.detect.DetectionValidator(
             self.test_loader, save_dir=self.save_dir, args=copy(self.args), _callbacks=self.callbacks

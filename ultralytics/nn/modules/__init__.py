@@ -63,7 +63,6 @@ from .conv import (
     SpatialAttention,
 )
 from .head import OBB, Classify, Detect, Detect_VID, Pose, RTDETRDecoder, Segment, WorldDetect
-from .temporal_adapter import TemporalFeatureAdapter, TemporalScaleAdapter
 from .transformer import (
     AIFI,
     MLP,
@@ -116,8 +115,6 @@ __all__ = (
     "Proto",
     "Detect",
     "Detect_VID",
-    "TemporalFeatureAdapter",
-    "TemporalScaleAdapter",
     "Segment",
     "Pose",
     "Classify",
