@@ -123,6 +123,13 @@ class BaseValidator:
                     # Detect_VID validation is single-frame but still uses the custom VID head.
                     # Keep validation in FP32 to avoid half-precision NaNs in Mamba/FAM paths.
                     self.args.half = False
+                elif any(
+                    m.__class__.__name__ in {"SimpleStem", "VisionClueMerge", "VSSBlock", "XSSBlock"}
+                    for m in de_parallel(model).modules()
+                ):
+                    # Official Mamba-YOLO single-frame models can produce FP16 NaNs during early
+                    # from-scratch validation even while FP32 training loss is finite.
+                    self.args.half = False
             except Exception:
                 pass
 
