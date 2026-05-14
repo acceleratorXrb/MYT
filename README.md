@@ -44,6 +44,7 @@ On the training server:
 cd /root/autodl-tmp/MYT
 source .venv/bin/activate
 git pull
+git submodule update --init --recursive
 
 python tools/model_variant.py train-command temporal_adapter_p4p5_yolov_v4_2026-05-14 \
   --name temporal_adapter_p4p5_yolov_v4
@@ -127,6 +128,19 @@ When a new architecture stage becomes important, add a new YAML file under
 | `tools/run_visdrone_comparison_examples.py` | One-command pipeline to export baseline/new predictions and select visual examples where the new model is better. |
 | `tools/select_visdrone_comparison_examples.py` | Selects thesis-friendly qualitative examples using GT, baseline predictions, and new-model predictions. |
 | `asserts/` | Figures used by the README or thesis, such as architecture diagrams and ODSSBlock illustrations. |
+
+### Official Reference Code
+
+| Path | Purpose |
+| --- | --- |
+| `third_party/Mamba-YOLO-official/` | Clean official Mamba-YOLO repository pinned as a Git submodule. Use it as the untouched reference implementation for baseline checks and code comparison. Do not edit experiment code directly inside this folder unless intentionally updating the reference. |
+
+After cloning this repository on a new machine, initialize the official reference
+code with:
+
+```bash
+git submodule update --init --recursive
+```
 
 ## Current Main Hyperparameters
 
