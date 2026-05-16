@@ -115,6 +115,7 @@ When a new architecture stage becomes important, add a new YAML file under
 | `tools/export_visdrone_vid_clip_tracks.py` | Offline clip/window detection plus ByteTrack export. Current MOT/ID evaluation should use this path. |
 | `tools/eval_visdrone_vid_cls_flicker.py` | Classification flicker metrics: `macro_flicker` and `micro_flicker`. |
 | `tools/eval_visdrone_vid_mot.py` | Current MOT/ID metrics: IDF1, IDP, IDR, ID switches, and fragmentation. |
+| `tools/validate_visdrone_video_metrics.py` | Synthetic self-check for the local flicker and MOT/ID metric implementations. |
 | `tools/eval_visdrone_vid_official.py` | Wrapper for official VisDrone AP/AR evaluation. Periodic extra-eval does not run official AP/AR by default. |
 | `tools/run_visdrone_vid_official_eval.py` | Manual official VisDrone VID evaluation runner. |
 | `tools/temporal_state.py` | Helper for resetting temporal state across video sequences. |
@@ -156,6 +157,25 @@ These options define `Mamba-YOLO-T-VID-TRFA-v6`:
 
 If these options or the head structure change substantially, treat the result as
 a new experiment variant and create a new `model_variants/*.yaml` record.
+
+## Metric Validation
+
+The periodic `flicker` and `MOT/ID` numbers are local auxiliary video metrics,
+not official VisDrone AP/AR metrics. Before trusting them after code changes,
+run the synthetic self-check:
+
+```bash
+python tools/validate_visdrone_video_metrics.py
+```
+
+This script builds a tiny VisDrone-style GT/prediction fixture with hand-checked
+expected values and verifies `macro_flicker`, `micro_flicker`, `IDF1`, `IDP`,
+`IDR`, `ID Switches`, and `Frag`. If this script fails, do not compare model
+video metrics until the metric implementation is fixed.
+
+When `mbyolo_train.py` is launched with `--extra_eval_period > 0`, this
+self-check runs once before periodic video evaluation is registered. Use
+`--skip_metric_self_check` only when deliberately debugging the metric scripts.
 
 ## Experiment Notes
 

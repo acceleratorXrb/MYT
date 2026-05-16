@@ -54,6 +54,23 @@ def run_extra_eval_step(name, cmd, strict):
     return {"name": name, "ok": ok, "returncode": completed.returncode, "cmd": cmd}
 
 
+def validate_video_metric_scripts(strict=True):
+    """Run the synthetic self-check for local flicker and MOT/ID metric scripts."""
+    script = Path(ROOT) / "tools" / "validate_visdrone_video_metrics.py"
+    cmd = [sys.executable, str(script)]
+    print(f"[metric-self-check] {' '.join(cmd)}", flush=True)
+    completed = subprocess.run(cmd, cwd=ROOT)
+    if completed.returncode != 0:
+        message = (
+            f"[metric-self-check] failed with exit code {completed.returncode}; "
+            "video metrics are not trusted"
+        )
+        if strict:
+            raise RuntimeError(message)
+        print(message, flush=True)
+    return completed.returncode
+
+
 def build_extra_eval_callback(opt):
     period = max(int(opt.extra_eval_period), 0)
     official_root = Path(resolve_path(opt.extra_eval_official_root))
@@ -407,6 +424,7 @@ def parse_opt():
     parser.add_argument('--extra_eval_iou', type=float, default=0.7, help='NMS IoU threshold for extra eval exports')
     parser.add_argument('--extra_eval_clip_inference', action='store_true', help='export detections with explicit key+ref clip inference instead of streaming')
     parser.add_argument('--extra_eval_window_inference', action='store_true', help='export detections/tracks with non-overlapping VID windows; every frame is inferred once')
+    parser.add_argument('--skip_metric_self_check', action='store_true', help='skip synthetic flicker/MOT metric self-check before periodic extra eval')
     parser.add_argument('--extra_eval_strict', action='store_true', help='fail training if an extra-eval step fails')
     opt = parser.parse_args()
     return opt
@@ -474,6 +492,8 @@ if __name__ == '__main__':
         if opt.trfa_warmup_epochs > 0:
             model.add_callback("on_train_epoch_start", build_trfa_warmup_callback(opt))
         if opt.extra_eval_period > 0:
+            if not opt.skip_metric_self_check:
+                validate_video_metric_scripts(strict=True)
             model.add_callback("on_model_save", build_extra_eval_callback(opt))
         args["resume"] = opt.resume
         model.train(**args)
