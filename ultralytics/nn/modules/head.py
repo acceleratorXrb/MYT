@@ -220,6 +220,7 @@ class Detect_VID(Detect):
         valid = []
         for r in buf[-max_refs:]:
             if r.shape[0] == B:
+                r = r.to(device=feat.device, dtype=feat.dtype, non_blocking=True)
                 valid.append(r if r.shape[2:] == (H, W) else F.interpolate(r, size=(H, W), mode="bilinear"))
         if valid:
             window = torch.stack([*valid, feat], dim=1).reshape(B * (len(valid) + 1), C, H, W)
@@ -243,14 +244,21 @@ class Detect_VID(Detect):
     def forward(self, x):
         """Run the VID detection head."""
         self.aux_outputs = [] if self.training else None
+        single_frame_clip = False
         T = self.clip_layout[1] if self.clip_layout is not None else 1
         if self.clip_layout is not None and T <= 1:
             self.clip_layout = None
+            single_frame_clip = True
 
         for i in range(self.nl):
             if self.clip_layout is not None:
                 x[i] = self._forward_clip_level(i, x[i])
-            elif not self.training and self.num_ref_frames > 0 and self._fusion_mode() != "none":
+            elif (
+                not single_frame_clip
+                and not self.training
+                and self.num_ref_frames > 0
+                and self._fusion_mode() != "none"
+            ):
                 x[i] = self._forward_stream_level(i, x[i])
             else:
                 x[i] = self._head_from_feature(i, x[i])

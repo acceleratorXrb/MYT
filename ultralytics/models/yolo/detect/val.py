@@ -77,6 +77,8 @@ class DetectionValidator(BaseValidator):
             if isinstance(head, Detect_VID):
                 cl = batch["clip_layout"].view(-1)
                 head.clip_layout = (int(cl[0].item()), int(cl[1].item()))
+                head.num_ref_frames = 0
+                head.reset_buffer()
                 head.temporal_fusion = str(getattr(self.args, "temporal_fusion", "trfa") or "trfa")
                 head.trfa_levels = str(getattr(self.args, "trfa_levels", "all") or "all")
 
