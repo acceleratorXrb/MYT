@@ -121,19 +121,16 @@ erasing: 0.4 # (float) probability of random erasing during classification train
 crop_fraction: 1.0 # (float) image crop fraction for classification (0.1-1), 1.0 means no crop, must be greater than 0.
 
 # VID clip-mode settings (consumed by VIDClipDataset when data yaml has task: vid)
-num_ref_frames: 4 # (int) reference frames per clip; 0 disables temporal smoothing
+num_ref_frames: 4 # (int) reference frames per clip; 0 disables temporal adaptation
 clip_stride: 1 # (int) temporal stride between sampled refs
 ref_sample: adjacent # (str) ref-frame sampling: adjacent | causal | uniform_local | uniform_global
 vid_clip_mode: center # (str) VID training layout: center | window
 vid_window_size: 0 # (int) frames per window when vid_clip_mode=window; 0 defaults to num_ref_frames+1
 ref_aux_loss: 0.0 # (float) auxiliary detection loss weight for reference frames in VID clip training
-temporal_fusion: score_smooth # (str) Detect_VID temporal fusion: score_smooth | none
-score_smooth_sigma: 0.03 # (float) normalized local radius for score_smooth temporal support
-score_smooth_cls_gain: 0.6 # (float) class probability temporal smoothing gain for score_smooth
-score_smooth_conf_gain: 0.7 # (float) low-current-confidence temporal boost gain for score_smooth
-score_smooth_min_ref_score: 0.001 # (float) minimum reference score used by score_smooth
-score_smooth_warmup_epochs: 0.0 # (float) epochs to linearly warm Detect_VID score smoothing alpha; 0 disables
-score_smooth_alpha_target: 1.0 # (float) target score smoothing alpha value at the end of warmup
+temporal_fusion: trfa # (str) Detect_VID temporal fusion: trfa | none
+trfa_levels: all # (str) feature pyramid levels for temporal residual feature adapter: all | p3 | p4 | p5 | p3p4 | p4p5 | none
+trfa_warmup_epochs: 0.0 # (float) epochs to linearly warm temporal residual adapter alpha; 0 disables
+trfa_alpha_target: 1.0 # (float) target temporal residual adapter alpha value at the end of warmup
 debug_clip_shape: False # (bool) print first training batch image shape and clip layout
 debug_clip_aug: False # (bool) print first few VID clip augmentation decisions and output shapes
 debug_clip_refs: False # (bool) print first few VID key/ref frame paths and positions

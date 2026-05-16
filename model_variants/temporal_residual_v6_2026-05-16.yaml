@@ -1,15 +1,15 @@
-id: score_smooth_v5_2026-05-14
-date: "2026-05-14"
-name: Mamba-YOLO-T-VID-ScoreSmooth-v5
-status: previous_main_archived
+id: temporal_residual_v6_2026-05-16
+date: "2026-05-16"
+name: Mamba-YOLO-T-VID-TRFA-v6
+status: current_main
 
 constraint:
   keep_backbone: official Mamba-YOLO-T
   keep_neck: official Mamba-YOLO-T neck / feature pyramid
   editable_parts:
     - VID input window organization
-    - Detect_VID head temporal score smoothing
-    - offline video evaluation path
+    - Detect_VID temporal feature adapter
+    - offline video detection / flicker / MOT-ID evaluation path
 
 architecture:
   input: 16-frame VID window
@@ -18,22 +18,21 @@ architecture:
     - run each frame through Mamba-YOLO-T backbone once
     - run each frame through Mamba-YOLO neck once
     - keep official backbone/neck topology unchanged
-    - produce P3/P4/P5 features for each frame
+    - produce P3/P4/P5 features for every frame
   head:
     name: Detect_VID
-    regression: unchanged YOLOv8/Mamba-YOLO current-frame bbox distribution branch
-    classification:
-      - raw class logits from cv3_pre and final projection
-      - TemporalScoreSmoother over nearby reference-frame grid cells
-      - smoothed class logits
-    temporal_score_smoother:
-      - no feature-level attention
-      - no proposal transformer
-      - local max-pooled reference class-probability support
-      - class probability smoothing
-      - positive low-confidence score boost
-      - current-frame boxes remain primary
-  output: current-frame bbox regression plus smoothed class logits
+    temporal_module:
+      name: TemporalResidualFeatureAdapter
+      placement: before the original Detect bbox/class branches
+      levels: P3/P4/P5
+      structure:
+        - 1x1 channel reduction
+        - local 3x3x3 depthwise Conv3d over time/height/width
+        - 1x1 channel expansion
+        - residual alpha gate
+    regression: original YOLOv8/Mamba-YOLO bbox distribution branch after TRFA
+    classification: original YOLOv8/Mamba-YOLO class branch after TRFA
+  output: per-frame bbox regression and class scores from temporally adapted features
 
 main_hyperparameters:
   vid_clip_mode: window
@@ -41,14 +40,11 @@ main_hyperparameters:
   num_ref_frames: 15
   clip_stride: 1
   ref_sample: adjacent
-  temporal_fusion: score_smooth
+  temporal_fusion: trfa
+  trfa_levels: all
+  trfa_warmup_epochs: 5
+  trfa_alpha_target: 1.0
   ref_aux_loss: 0.0
-  score_smooth_sigma: 0.03
-  score_smooth_cls_gain: 0.60
-  score_smooth_conf_gain: 0.70
-  score_smooth_min_ref_score: 0.001
-  score_smooth_warmup_epochs: 5
-  score_smooth_alpha_target: 1.0
 
 training_base:
   config: ultralytics/cfg/models/mamba-yolo/Mamba-YOLO-T-VID.yaml
@@ -56,10 +52,16 @@ training_base:
   data_task: vid
   init_weights: output_dir/visdrone_vid/baseline/weights/best.pt
   optimizer: AdamW
-  lr0: 0.0003
+  lr0: 0.0005
   lrf: 0.01
+  momentum: 0.937
+  weight_decay: 0.0005
   warmup_epochs: 3.0
-  warmup_bias_lr: 0.0003
+  warmup_momentum: 0.8
+  warmup_bias_lr: 0.0005
+  box: 7.5
+  cls: 0.5
+  dfl: 1.5
   epochs: 30
   imgsz: 640
   batch_size: 2
@@ -95,16 +97,48 @@ training_command:
   - --optimizer
   - AdamW
   - --lr0
-  - "0.0003"
+  - "0.0005"
   - --lrf
   - "0.01"
+  - --momentum
+  - "0.937"
+  - --weight_decay
+  - "0.0005"
   - --warmup_epochs
   - "3.0"
+  - --warmup_momentum
+  - "0.8"
   - --warmup_bias_lr
-  - "0.0003"
+  - "0.0005"
+  - --box
+  - "7.5"
+  - --cls
+  - "0.5"
+  - --dfl
+  - "1.5"
+  - --hsv_h
+  - "0.015"
+  - --hsv_s
+  - "0.7"
+  - --hsv_v
+  - "0.4"
   - --mosaic
   - "0.0"
   - --mixup
+  - "0.0"
+  - --fliplr
+  - "0.5"
+  - --flipud
+  - "0.0"
+  - --degrees
+  - "0.0"
+  - --translate
+  - "0.1"
+  - --scale
+  - "0.5"
+  - --shear
+  - "0.0"
+  - --perspective
   - "0.0"
   - --vid_clip_mode
   - window
@@ -119,18 +153,12 @@ training_command:
   - --ref_aux_loss
   - "0.0"
   - --temporal_fusion
-  - score_smooth
-  - --score_smooth_sigma
-  - "0.03"
-  - --score_smooth_cls_gain
-  - "0.60"
-  - --score_smooth_conf_gain
-  - "0.70"
-  - --score_smooth_min_ref_score
-  - "0.001"
-  - --score_smooth_warmup_epochs
+  - trfa
+  - --trfa_levels
+  - all
+  - --trfa_warmup_epochs
   - "5"
-  - --score_smooth_alpha_target
+  - --trfa_alpha_target
   - "1.0"
   - --extra_eval_period
   - "1"
@@ -141,9 +169,9 @@ training_command:
   - --project
   - output_dir/visdrone_vid
   - --name
-  - score_smooth_v5
+  - trfa_v6
 
 notes:
-  - This variant intentionally removes the heavier temporal adapter and YOLOV proposal refiner from the main path.
-  - The goal is to improve video metrics with a simpler, more explainable score-level temporal stabilizer.
-  - Expected strengths are lower flicker, fewer ID switches, fewer fragments, and better short-gap recall without changing current-frame boxes.
+  - This is the current final version of the simpler temporal-feature idea.
+  - Removed active score-smoothing and proposal-refinement code paths from the train/export interfaces.
+  - The official clean Mamba-YOLO reference remains under third_party/Mamba-YOLO-official.

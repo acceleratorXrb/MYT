@@ -106,12 +106,8 @@ CFG_FLOAT_KEYS = {  # integer or float arguments, i.e. x=2 and x=2.0
     "workspace",
     "batch",
     "ref_aux_loss",
-    "score_smooth_sigma",
-    "score_smooth_cls_gain",
-    "score_smooth_conf_gain",
-    "score_smooth_min_ref_score",
-    "score_smooth_warmup_epochs",
-    "score_smooth_alpha_target",
+    "trfa_warmup_epochs",
+    "trfa_alpha_target",
 }
 CFG_FRACTION_KEYS = {  # fractional float arguments with 0.0<=values<=1.0
     "dropout",

@@ -77,10 +77,8 @@ class DetectionValidator(BaseValidator):
             if isinstance(head, Detect_VID):
                 cl = batch["clip_layout"].view(-1)
                 head.clip_layout = (int(cl[0].item()), int(cl[1].item()))
-                head.score_smooth_sigma = float(getattr(self.args, "score_smooth_sigma", 0.03) or 0.0)
-                head.score_smooth_cls_gain = float(getattr(self.args, "score_smooth_cls_gain", 0.6) or 0.0)
-                head.score_smooth_conf_gain = float(getattr(self.args, "score_smooth_conf_gain", 0.7) or 0.0)
-                head.score_smooth_min_ref_score = float(getattr(self.args, "score_smooth_min_ref_score", 0.05) or 0.0)
+                head.temporal_fusion = str(getattr(self.args, "temporal_fusion", "trfa") or "trfa")
+                head.trfa_levels = str(getattr(self.args, "trfa_levels", "all") or "all")
 
         if self.args.save_hybrid:
             height, width = batch["img"].shape[2:]

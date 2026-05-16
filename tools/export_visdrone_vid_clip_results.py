@@ -30,11 +30,8 @@ def parse_args():
     parser.add_argument("--ref_sample", default="adjacent", choices=["adjacent", "causal"])
     parser.add_argument("--all_keys", action="store_true", help="Infer non-overlapping windows and output every frame once.")
     parser.add_argument("--window_size", type=int, default=16, help="Frames per window when --all_keys is enabled.")
-    parser.add_argument("--temporal_fusion", default=None, choices=["score_smooth", "none"])
-    parser.add_argument("--score_smooth_sigma", type=float, default=None)
-    parser.add_argument("--score_smooth_cls_gain", type=float, default=None)
-    parser.add_argument("--score_smooth_conf_gain", type=float, default=None)
-    parser.add_argument("--score_smooth_min_ref_score", type=float, default=None)
+    parser.add_argument("--temporal_fusion", default=None, choices=["trfa", "none"])
+    parser.add_argument("--trfa_levels", default=None, choices=["all", "p3", "p4", "p5", "p3p4", "p4p5", "none"])
     return parser.parse_args()
 
 
@@ -118,14 +115,8 @@ def configure_temporal_options(model, args):
         if isinstance(module, Detect_VID):
             if args.temporal_fusion is not None:
                 module.temporal_fusion = args.temporal_fusion
-            if args.score_smooth_sigma is not None:
-                module.score_smooth_sigma = float(args.score_smooth_sigma)
-            if args.score_smooth_cls_gain is not None:
-                module.score_smooth_cls_gain = float(args.score_smooth_cls_gain)
-            if args.score_smooth_conf_gain is not None:
-                module.score_smooth_conf_gain = float(args.score_smooth_conf_gain)
-            if args.score_smooth_min_ref_score is not None:
-                module.score_smooth_min_ref_score = float(args.score_smooth_min_ref_score)
+            if args.trfa_levels is not None:
+                module.trfa_levels = args.trfa_levels
 
 
 def load_clip(frame_paths, imgsz, stride, return_all=False):

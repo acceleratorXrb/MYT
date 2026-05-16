@@ -90,23 +90,44 @@ class Detect(nn.Module):
         return dist2bbox(bboxes, anchors, xywh=True, dim=1)
 
 
-class Detect_VID(Detect):
-    """Mamba-YOLO video head with lightweight temporal score smoothing.
+class TemporalResidualFeatureAdapter(nn.Module):
+    """Local spatiotemporal residual adapter for one feature-pyramid level."""
 
-    The backbone and neck are unchanged from Mamba-YOLO. The detection head keeps
-    the center/current-frame box branch untouched and only smooths class scores
-    with nearby frames at the same feature-map neighborhood.
+    def __init__(self, channels: int, reduction: int = 2):
+        super().__init__()
+        hidden = max(16, channels // max(1, int(reduction)))
+        self.reduce = Conv(channels, hidden, 1)
+        self.temporal = nn.Conv3d(hidden, hidden, kernel_size=(3, 3, 3), padding=(1, 1, 1), groups=hidden, bias=False)
+        self.temporal_bn = nn.BatchNorm3d(hidden)
+        self.temporal_act = nn.SiLU(inplace=True)
+        self.expand = nn.Conv3d(hidden, channels, kernel_size=1, bias=False)
+        self.expand_bn = nn.BatchNorm3d(channels)
+        self.alpha = nn.Parameter(torch.tensor(0.0))
+
+    def forward(self, feat: torch.Tensor, B: int, T: int) -> torch.Tensor:
+        _, C, H, W = feat.shape
+        y = self.reduce(feat).view(B, T, -1, H, W).permute(0, 2, 1, 3, 4).contiguous()
+        y = self.temporal_act(self.temporal_bn(self.temporal(y)))
+        y = self.expand_bn(self.expand(y)).permute(0, 2, 1, 3, 4).reshape(B * T, C, H, W)
+        return feat + self.alpha.to(dtype=feat.dtype, device=feat.device).clamp(0.0, 1.0) * y
+
+
+class Detect_VID(Detect):
+    """Mamba-YOLO video head with temporal residual feature adaptation.
+
+    The official Mamba-YOLO-T backbone and neck stay unchanged. In VID mode,
+    each P3/P4/P5 feature map first passes through a lightweight local
+    spatiotemporal residual adapter over a consecutive frame window. The adapted
+    features are then decoded by the original YOLOv8/Mamba-YOLO detect branches,
+    so both bbox regression and classification can benefit from temporal cues.
     """
 
     def __init__(self, nc=80, topk=750, conf_thr=0.001, num_ref_frames=4, ch=()):
         super().__init__(nc, ch)
         self.num_ref_frames = int(num_ref_frames)
-        self.temporal_fusion = "score_smooth"
-        self.score_smooth_sigma = 0.03
-        self.score_smooth_cls_gain = 0.6
-        self.score_smooth_conf_gain = 0.7
-        self.score_smooth_min_ref_score = float(conf_thr)
-        self.score_smooth_alpha = nn.ParameterList(nn.Parameter(torch.tensor(0.0)) for _ in ch)
+        self.temporal_fusion = "trfa"
+        self.trfa_levels = "all"
+        self.temporal_adapters = nn.ModuleList(TemporalResidualFeatureAdapter(c, reduction=2) for c in ch)
         self.debug_vid_head = False
         self._debug_vid_head_printed = 0
         self.clip_layout: tuple[int, int] | None = None
@@ -120,175 +141,99 @@ class Detect_VID(Detect):
         self._stream_buffers = [[] for _ in range(self.nl)] if self.nl else None
 
     @torch.no_grad()
-    def set_score_smooth_alpha(self, alpha: float) -> None:
-        """Set the residual score-smoothing gate for all feature levels."""
-        for a in self.score_smooth_alpha:
-            a.fill_(float(alpha))
-
-    def _cv3_pre(self, i: int, x: torch.Tensor) -> torch.Tensor:
-        s = self.cv3[i]
-        return s[1](s[0](x))
-
-    def _cv3_cls(self, i: int, pre: torch.Tensor) -> torch.Tensor:
-        return self.cv3[i][2](pre)
+    def set_temporal_alpha(self, alpha: float) -> None:
+        """Set the residual adapter gate for all enabled feature levels."""
+        for adapter in self.temporal_adapters:
+            adapter.alpha.fill_(float(alpha))
 
     def _fusion_mode(self) -> str:
-        mode = str(getattr(self, "temporal_fusion", "score_smooth") or "score_smooth").lower()
-        if mode not in {"score_smooth", "none"}:
-            raise ValueError(f"temporal_fusion must be score_smooth|none, got {mode!r}")
+        mode = str(getattr(self, "temporal_fusion", "trfa") or "trfa").lower()
+        if mode not in {"trfa", "none"}:
+            raise ValueError(f"temporal_fusion must be trfa|none, got {mode!r}")
         return mode
 
-    def _window_ref_indices(self, key_pos: int, T: int) -> list[int]:
-        """Pick nearest temporal neighbors for one key frame in a window."""
-        n = max(0, int(getattr(self, "num_ref_frames", 0)))
-        if n <= 0 or T <= 1:
-            return []
-        refs = []
-        step = 1
-        while len(refs) < n and step < T + n:
-            for j in (key_pos - step, key_pos + step):
-                j = min(max(j, 0), T - 1)
-                if j != key_pos and j not in refs:
-                    refs.append(j)
-                if len(refs) >= n:
-                    break
-            step += 1
-        return refs
+    def _level_enabled(self, i: int) -> bool:
+        levels = str(getattr(self, "trfa_levels", "all") or "all").lower()
+        names = {0: "p3", 1: "p4", 2: "p5"}
+        if levels == "all":
+            return True
+        if levels == "none":
+            return False
+        enabled = set(levels.replace("+", "").split(",")) if "," in levels else {levels}
+        if levels == "p3p4":
+            enabled = {"p3", "p4"}
+        elif levels == "p4p5":
+            enabled = {"p4", "p5"}
+        return names.get(i, f"p{i + 3}") in enabled
 
-    def _score_smooth(self, i: int, key_logits: torch.Tensor, ref_logits: torch.Tensor) -> torch.Tensor:
-        """Smooth class probabilities with local, confidence-weighted temporal support."""
-        if self._fusion_mode() == "none" or ref_logits.numel() == 0 or ref_logits.shape[1] == 0:
-            return key_logits
+    def _head_from_feature(self, i: int, feat: torch.Tensor) -> torch.Tensor:
+        return torch.cat((self.cv2[i](feat), self.cv3[i](feat)), 1)
 
-        cls_gain = float(getattr(self, "score_smooth_cls_gain", 0.0) or 0.0)
-        conf_gain = float(getattr(self, "score_smooth_conf_gain", 0.0) or 0.0)
-        if cls_gain <= 0.0 and conf_gain <= 0.0:
-            return key_logits
+    def _adapt_window_feature(self, i: int, feat: torch.Tensor, B: int, T: int) -> torch.Tensor:
+        if self._fusion_mode() == "none" or T <= 1 or not self._level_enabled(i):
+            return feat
+        return self.temporal_adapters[i](feat, B, T)
 
-        B, R, C, H, W = ref_logits.shape
-        key_prob = key_logits.sigmoid()
-        ref_prob = ref_logits.sigmoid()
-        ref_conf = ref_prob.amax(dim=2, keepdim=True)
-
-        min_ref = float(getattr(self, "score_smooth_min_ref_score", 0.0) or 0.0)
-        if min_ref > 0.0:
-            valid = (ref_conf >= min_ref).to(ref_prob.dtype)
-            ref_prob = ref_prob * valid
-            ref_conf = ref_conf * valid
-
-        sigma = float(getattr(self, "score_smooth_sigma", 0.0) or 0.0)
-        radius = max(0, int(round(sigma * max(H, W)))) if sigma > 0.0 else 0
-        if radius > 0:
-            k = radius * 2 + 1
-            ref_prob = F.max_pool2d(ref_prob.reshape(B * R * C, 1, H, W), k, stride=1, padding=radius).view(
-                B, R, C, H, W
-            )
-            ref_conf = F.max_pool2d(ref_conf.reshape(B * R, 1, H, W), k, stride=1, padding=radius).view(B, R, 1, H, W)
-
-        ref_weight = ref_conf / ref_conf.sum(dim=1, keepdim=True).clamp_min(1e-6)
-        ref_mean = (ref_prob * ref_weight).sum(dim=1)
-        ref_support = ref_conf.amax(dim=1)
-        alpha = self.score_smooth_alpha[i].to(device=key_logits.device, dtype=key_logits.dtype).clamp(0.0, 1.0)
-
-        smooth_w = (alpha * cls_gain * ref_support).clamp(0.0, 1.0)
-        out_prob = key_prob * (1.0 - smooth_w) + ref_mean * smooth_w
-
-        if conf_gain > 0.0:
-            key_conf = key_prob.amax(dim=1, keepdim=True)
-            uncertain = 1.0 - key_conf
-            out_prob = out_prob + alpha * conf_gain * torch.relu(ref_mean - key_prob) * uncertain * ref_support
-
-        return torch.logit(out_prob.clamp(1e-4, 1.0 - 1e-4))
-
-    def _aggregate_clip(self, i: int, feat: torch.Tensor) -> torch.Tensor:
-        """Aggregate explicit VID clips/windows."""
+    def _forward_clip_level(self, i: int, feat: torch.Tensor) -> torch.Tensor:
         assert self.clip_layout is not None
         B, T = self.clip_layout
-        reg_full = self.cv2[i](feat)
-        pre_full = self._cv3_pre(i, feat)
-        cls_full = self._cv3_cls(i, pre_full)
-        if T <= 1 or self.num_ref_frames <= 0 or self._fusion_mode() == "none":
-            return torch.cat((reg_full, cls_full), 1)
-
-        _, _, H, W = pre_full.shape
-        cls_clip = cls_full.view(B, T, self.nc, H, W)
-        reg_clip = reg_full.view(B, T, 4 * self.reg_max, H, W)
+        adapted = self._adapt_window_feature(i, feat, B, T)
+        _, C, H, W = adapted.shape
 
         if self.clip_all_keys:
-            cls_outs = []
-            ref_debug = [(t, self._window_ref_indices(t, T)) for t in range(min(T, 5))]
-            for t in range(T):
-                refs = self._window_ref_indices(t, T)
-                ref_logits = cls_clip.index_select(1, torch.tensor(refs, device=feat.device)) if refs else cls_clip[:, :0]
-                cls_outs.append(self._score_smooth(i, cls_clip[:, t], ref_logits))
-            cls_all = torch.stack(cls_outs, dim=1).reshape(B * T, self.nc, H, W)
-            out = torch.cat((reg_full, cls_all), 1)
+            out = self._head_from_feature(i, adapted)
             if self.debug_vid_head and self._debug_vid_head_printed < 4:
                 print(
                     f"[debug-vid-head] mode=window level={i} B={B} T={T} fusion={self._fusion_mode()} "
-                    f"num_ref_frames={self.num_ref_frames} ref_debug={ref_debug} "
-                    f"alpha={float(self.score_smooth_alpha[i].detach().cpu()):.4g} "
-                    f"pre_shape={tuple(pre_full.shape)} out_shape={tuple(out.shape)}",
+                    f"trfa_levels={self.trfa_levels} enabled={self._level_enabled(i)} "
+                    f"alpha={float(self.temporal_adapters[i].alpha.detach().cpu()):.4g} "
+                    f"in_shape={tuple(feat.shape)} out_shape={tuple(out.shape)}",
                     flush=True,
                 )
                 self._debug_vid_head_printed += 1
             return out
 
-        key_logits = cls_clip[:, 0]
-        ref_logits = cls_clip[:, 1:]
-        cls_out = self._score_smooth(i, key_logits, ref_logits)
-        out = torch.cat((reg_clip[:, 0], cls_out), 1)
-
+        adapted_clip = adapted.reshape(B, T, C, H, W)
+        key_feat = adapted_clip[:, 0].reshape(B, C, H, W)
+        out = self._head_from_feature(i, key_feat)
         if self.training and self.aux_outputs is not None and T > 1:
-            aux = torch.cat(
-                (
-                    reg_clip[:, 1:].reshape(B * (T - 1), -1, H, W),
-                    cls_clip[:, 1:].reshape(B * (T - 1), self.nc, H, W),
-                ),
-                1,
-            )
-            self.aux_outputs.append(aux)
+            ref_feat = adapted_clip[:, 1:].reshape(B * (T - 1), C, H, W)
+            self.aux_outputs.append(self._head_from_feature(i, ref_feat))
         if self.debug_vid_head and self._debug_vid_head_printed < 4:
             print(
                 f"[debug-vid-head] mode=center level={i} B={B} T={T} fusion={self._fusion_mode()} "
-                f"ref_count={ref_logits.shape[1]} alpha={float(self.score_smooth_alpha[i].detach().cpu()):.4g} "
-                f"pre_shape={tuple(pre_full.shape)} out_shape={tuple(out.shape)}",
+                f"trfa_levels={self.trfa_levels} enabled={self._level_enabled(i)} "
+                f"alpha={float(self.temporal_adapters[i].alpha.detach().cpu()):.4g} "
+                f"in_shape={tuple(feat.shape)} out_shape={tuple(out.shape)}",
                 flush=True,
             )
             self._debug_vid_head_printed += 1
         return out
 
-    def _aggregate_stream(self, i: int, feat: torch.Tensor) -> torch.Tensor:
-        """Causal score smoothing for plain frame-by-frame inference."""
-        reg_full = self.cv2[i](feat)
-        pre_full = self._cv3_pre(i, feat)
-        cls_full = self._cv3_cls(i, pre_full)
-        B, _, H, W = cls_full.shape
-
+    def _forward_stream_level(self, i: int, feat: torch.Tensor) -> torch.Tensor:
+        B, C, H, W = feat.shape
         if self._stream_buffers is None:
             self.reset_buffer()
         assert self._stream_buffers is not None
         buf = self._stream_buffers[i]
         max_refs = max(0, int(self.num_ref_frames))
-        ref_count_before = len(buf)
-
-        if max_refs > 0 and buf and self._fusion_mode() != "none":
-            valid = []
-            for r in buf[-max_refs:]:
-                if r.shape[0] == B:
-                    valid.append(r if r.shape[2:] == (H, W) else F.interpolate(r, size=(H, W), mode="bilinear"))
-            if valid:
-                cls_full = self._score_smooth(i, cls_full, torch.stack(valid, dim=1))
-
-        buf.append(cls_full.detach())
+        valid = []
+        for r in buf[-max_refs:]:
+            if r.shape[0] == B:
+                valid.append(r if r.shape[2:] == (H, W) else F.interpolate(r, size=(H, W), mode="bilinear"))
+        if valid:
+            window = torch.stack([*valid, feat], dim=1).reshape(B * (len(valid) + 1), C, H, W)
+        else:
+            window = feat
+        adapted = self._adapt_window_feature(i, window, B, len(valid) + 1).reshape(B, len(valid) + 1, C, H, W)[:, -1]
+        buf.append(feat.detach())
         if len(buf) > max_refs:
             del buf[:-max_refs]
-
-        out = torch.cat((reg_full, cls_full), 1)
+        out = self._head_from_feature(i, adapted)
         if self.debug_vid_head and self._debug_vid_head_printed < 4:
             print(
                 f"[debug-vid-head] mode=stream level={i} B={B} fusion={self._fusion_mode()} "
-                f"ref_count={ref_count_before} alpha={float(self.score_smooth_alpha[i].detach().cpu()):.4g} "
+                f"ref_count={len(valid)} alpha={float(self.temporal_adapters[i].alpha.detach().cpu()):.4g} "
                 f"out_shape={tuple(out.shape)}",
                 flush=True,
             )
@@ -304,11 +249,11 @@ class Detect_VID(Detect):
 
         for i in range(self.nl):
             if self.clip_layout is not None:
-                x[i] = self._aggregate_clip(i, x[i])
+                x[i] = self._forward_clip_level(i, x[i])
             elif not self.training and self.num_ref_frames > 0 and self._fusion_mode() != "none":
-                x[i] = self._aggregate_stream(i, x[i])
+                x[i] = self._forward_stream_level(i, x[i])
             else:
-                x[i] = torch.cat((self.cv2[i](x[i]), self.cv3[i](x[i])), 1)
+                x[i] = self._head_from_feature(i, x[i])
 
         if self.training:
             return x
@@ -333,6 +278,7 @@ class Detect_VID(Detect):
             dbox = self.decode_bboxes(self.dfl(box), self.anchors.unsqueeze(0)) * self.strides
         y = torch.cat((dbox, cls.sigmoid()), 1)
         return y if self.export else (y, x)
+
 
 class Segment(Detect):
     """YOLOv8 Segment head for segmentation models."""

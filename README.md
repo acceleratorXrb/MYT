@@ -13,7 +13,7 @@ object detection. The current research constraint is:
 Current variant:
 
 ```text
-Mamba-YOLO-T-VID-ScoreSmooth-v5
+Mamba-YOLO-T-VID-TRFA-v6
 ```
 
 High-level flow:
@@ -23,16 +23,16 @@ High-level flow:
   -> official Mamba-YOLO-T backbone
   -> official Mamba-YOLO-T neck / feature pyramid
   -> Detect_VID
+      - TemporalResidualFeatureAdapter on P3/P4/P5
       - YOLOv8-style bbox regression branch
-      - raw classification branch
-      - lightweight TemporalScoreSmoother
-      - smoothed class logits
-  -> offline VID detections / flicker / MOT-ID metrics
+      - YOLOv8-style classification branch
+      -> offline VID detections / flicker / MOT-ID metrics
 ```
 
-The official backbone and neck are not structurally modified. The current v5
-experiment keeps the detection structure simple: current-frame boxes remain
-unchanged, while nearby reference frames only smooth and boost class scores.
+The official backbone and neck are not structurally modified. The current v6
+experiment removes the older score-smoothing/proposal branches and uses one
+simple temporal residual feature adapter before the Detect branches, so both
+box regression and classification can receive local video context.
 
 ## Quick Start
 
@@ -44,16 +44,16 @@ source .venv/bin/activate
 git pull
 git submodule update --init --recursive
 
-python tools/model_variant.py train-command score_smooth_v5_2026-05-14 \
-  --name score_smooth_v5
+python tools/model_variant.py train-command temporal_residual_v6_2026-05-16 \
+  --name trfa_v6
 ```
 
 To inspect saved model variants:
 
 ```bash
 python tools/model_variant.py list
-python tools/model_variant.py show score_smooth_v5_2026-05-14
-python tools/model_variant.py train-command score_smooth_v5_2026-05-14
+python tools/model_variant.py show temporal_residual_v6_2026-05-16
+python tools/model_variant.py train-command temporal_residual_v6_2026-05-16
 ```
 
 ## Important Files
@@ -75,10 +75,10 @@ python tools/model_variant.py train-command score_smooth_v5_2026-05-14
 | --- | --- |
 | `ultralytics/cfg/models/mamba-yolo/Mamba-YOLO-T-VID.yaml` | VID model YAML. It keeps the official Mamba-YOLO-T backbone/neck and uses `Detect_VID`. |
 | `ultralytics/cfg/datasets/VisDrone-VID.yaml` | VisDrone-VID dataset config. |
-| `ultralytics/cfg/default.yaml` | Default Ultralytics arguments, extended with VID window and score-smoothing options. |
-| `ultralytics/nn/modules/head.py` | Detection heads. `Detect_VID` is the current video head and owns the lightweight temporal score smoother. |
-| `ultralytics/models/yolo/detect/train.py` | Passes VID clip layout and score-smoothing options into `Detect_VID` during training. |
-| `ultralytics/models/yolo/detect/val.py` | Passes VID clip layout and score-smoothing options during validation. |
+| `ultralytics/cfg/default.yaml` | Default Ultralytics arguments, extended with VID window and temporal residual adapter options. |
+| `ultralytics/nn/modules/head.py` | Detection heads. `Detect_VID` is the current video head and owns `TemporalResidualFeatureAdapter`. |
+| `ultralytics/models/yolo/detect/train.py` | Passes VID clip layout and TRFA options into `Detect_VID` during training. |
+| `ultralytics/models/yolo/detect/val.py` | Passes VID clip layout and TRFA options during validation. |
 | `ultralytics/utils/loss.py` | YOLO detection losses plus the optional VID reference-frame auxiliary loss. |
 
 ### Model Variant Records
@@ -86,7 +86,8 @@ python tools/model_variant.py train-command score_smooth_v5_2026-05-14
 | Path | Purpose |
 | --- | --- |
 | `model_variants/README.md` | Explains the model-variant record directory. |
-| `model_variants/score_smooth_v5_2026-05-14.yaml` | Current main model record: lightweight temporal score smoothing, key hyperparameters, notes, and training command. |
+| `model_variants/temporal_residual_v6_2026-05-16.yaml` | Current main model record: temporal residual feature adapter, key hyperparameters, notes, and training command. |
+| `model_variants/score_smooth_v5_2026-05-14.yaml` | Previous score-smoothing model record kept for rollback and ablation. |
 | `model_variants/temporal_adapter_p4p5_yolov_v4_2026-05-14.yaml` | Previous P4/P5 temporal adapter model record for rollback and ablation. |
 | `model_variants/temporal_adapter_yolov_v3_2026-05-13.yaml` | Previous all-level temporal adapter record for rollback and ablation. |
 | `model_variants/yolov_proposal_v2_2026-05-13.yaml` | Previous YOLOV proposal-only model record for rollback and ablation. |
@@ -141,19 +142,16 @@ git submodule update --init --recursive
 
 ## Current Main Hyperparameters
 
-These options define `Mamba-YOLO-T-VID-ScoreSmooth-v5`:
+These options define `Mamba-YOLO-T-VID-TRFA-v6`:
 
 ```bash
 --vid_clip_mode window
 --vid_window_size 16
 --num_ref_frames 15
---temporal_fusion score_smooth
---score_smooth_sigma 0.03
---score_smooth_cls_gain 0.60
---score_smooth_conf_gain 0.70
---score_smooth_min_ref_score 0.001
---score_smooth_warmup_epochs 5
---score_smooth_alpha_target 1.0
+--temporal_fusion trfa
+--trfa_levels all
+--trfa_warmup_epochs 5
+--trfa_alpha_target 1.0
 ```
 
 If these options or the head structure change substantially, treat the result as
@@ -165,15 +163,15 @@ Recommended comparisons:
 
 - Official Mamba-YOLO-T baseline: single-frame Mamba-YOLO.
 - Official YOLOv8 baseline: single-frame YOLOv8.
-- Current new model: Mamba-YOLO-T backbone/neck plus lightweight temporal score
-  smoothing inside `Detect_VID`.
-- Ablations: disable `score_smooth_conf_gain`, disable `score_smooth_cls_gain`,
-  vary `score_smooth_sigma`, compare against `temporal_fusion none`.
+- Current new model: Mamba-YOLO-T backbone/neck plus temporal residual feature
+  adaptation inside `Detect_VID`.
+- Ablations: compare `trfa_levels all/p3p4/p4p5`, vary `trfa_alpha_target`,
+  compare against `temporal_fusion none`.
 
-The previous best new model improved precision and identity stability but was
-too complex for the observed gains. The v5 score-smoothing model is intended to
-target video metrics directly with a simpler and more explainable temporal
-module.
+The previous score-smoothing/proposal branches improved precision and identity
+stability inconsistently. The current v6 model is intentionally simpler: one
+local temporal residual adapter is added before the existing Detect branches so
+the model can learn temporal correction directly at the feature level.
 
 ## Acknowledgement
 

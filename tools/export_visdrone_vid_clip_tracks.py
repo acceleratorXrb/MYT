@@ -47,11 +47,8 @@ def parse_args():
     parser.add_argument("--ref_sample", default="adjacent", choices=["adjacent", "causal"])
     parser.add_argument("--all_keys", action="store_true", help="Infer non-overlapping windows and track every frame once.")
     parser.add_argument("--window_size", type=int, default=16, help="Frames per window when --all_keys is enabled.")
-    parser.add_argument("--temporal_fusion", default=None, choices=["score_smooth", "none"])
-    parser.add_argument("--score_smooth_sigma", type=float, default=None)
-    parser.add_argument("--score_smooth_cls_gain", type=float, default=None)
-    parser.add_argument("--score_smooth_conf_gain", type=float, default=None)
-    parser.add_argument("--score_smooth_min_ref_score", type=float, default=None)
+    parser.add_argument("--temporal_fusion", default=None, choices=["trfa", "none"])
+    parser.add_argument("--trfa_levels", default=None, choices=["all", "p3", "p4", "p5", "p3p4", "p4p5", "none"])
     return parser.parse_args()
 
 

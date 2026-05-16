@@ -90,11 +90,8 @@ class DetectionTrainer(BaseTrainer):
                 head.clip_layout = (int(cl[0].item()), int(cl[1].item()))
                 head.clip_all_keys = bool(int(batch.get("clip_all_keys", torch.tensor([0], device=self.device)).view(-1)[0].item()))
                 head.num_ref_frames = int(getattr(self.args, "num_ref_frames", head.num_ref_frames))
-                head.temporal_fusion = getattr(self.args, "temporal_fusion", "score_smooth")
-                head.score_smooth_sigma = float(getattr(self.args, "score_smooth_sigma", 0.03) or 0.0)
-                head.score_smooth_cls_gain = float(getattr(self.args, "score_smooth_cls_gain", 0.6) or 0.0)
-                head.score_smooth_conf_gain = float(getattr(self.args, "score_smooth_conf_gain", 0.7) or 0.0)
-                head.score_smooth_min_ref_score = float(getattr(self.args, "score_smooth_min_ref_score", 0.05) or 0.0)
+                head.temporal_fusion = getattr(self.args, "temporal_fusion", "trfa")
+                head.trfa_levels = str(getattr(self.args, "trfa_levels", "all") or "all")
                 head.debug_vid_head = bool(getattr(self.args, "debug_vid_head", False))
         if getattr(self.args, "debug_clip_shape", False) and not getattr(self, "_debug_clip_shape_printed", False):
             clip_layout = batch.get("clip_layout")

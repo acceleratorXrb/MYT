@@ -135,20 +135,7 @@ def build_extra_eval_callback(opt):
                 )
                 if opt.extra_eval_window_inference:
                     export_cmd.extend(["--all_keys", "--window_size", opt.vid_window_size or opt.num_ref_frames + 1])
-                export_cmd.extend(
-                    [
-                        "--temporal_fusion",
-                        opt.temporal_fusion,
-                        "--score_smooth_sigma",
-                        opt.score_smooth_sigma,
-                        "--score_smooth_cls_gain",
-                        opt.score_smooth_cls_gain,
-                        "--score_smooth_conf_gain",
-                        opt.score_smooth_conf_gain,
-                        "--score_smooth_min_ref_score",
-                        opt.score_smooth_min_ref_score,
-                    ]
-                )
+                export_cmd.extend(["--temporal_fusion", opt.temporal_fusion, "--trfa_levels", opt.trfa_levels])
             else:
                 export_cmd.extend(["--batch", opt.extra_eval_batch])
             steps.append(run_extra_eval_step("export_detections", export_cmd, strict))
@@ -207,20 +194,7 @@ def build_extra_eval_callback(opt):
                 )
                 if opt.extra_eval_window_inference:
                     track_cmd.extend(["--all_keys", "--window_size", opt.vid_window_size or opt.num_ref_frames + 1])
-                track_cmd.extend(
-                    [
-                        "--temporal_fusion",
-                        opt.temporal_fusion,
-                        "--score_smooth_sigma",
-                        opt.score_smooth_sigma,
-                        "--score_smooth_cls_gain",
-                        opt.score_smooth_cls_gain,
-                        "--score_smooth_conf_gain",
-                        opt.score_smooth_conf_gain,
-                        "--score_smooth_min_ref_score",
-                        opt.score_smooth_min_ref_score,
-                    ]
-                )
+                track_cmd.extend(["--temporal_fusion", opt.temporal_fusion, "--trfa_levels", opt.trfa_levels])
             steps.append(run_extra_eval_step("export_tracks", track_cmd, strict))
             steps.append(
                 run_extra_eval_step(
@@ -252,9 +226,9 @@ def build_extra_eval_callback(opt):
     return on_model_save
 
 
-def build_score_smooth_warmup_callback(opt):
-    warmup_epochs = float(opt.score_smooth_warmup_epochs or 0.0)
-    alpha_target = float(opt.score_smooth_alpha_target)
+def build_trfa_warmup_callback(opt):
+    warmup_epochs = float(opt.trfa_warmup_epochs or 0.0)
+    alpha_target = float(opt.trfa_alpha_target)
 
     def on_train_epoch_start(trainer):
         if warmup_epochs <= 0.0:
@@ -266,24 +240,17 @@ def build_score_smooth_warmup_callback(opt):
         ratio = min(max(epoch / denom, 0.0), 1.0)
         alpha = alpha_target * ratio
         for module in trainer.model.modules():
-            setter = getattr(module, "set_score_smooth_alpha", None)
+            setter = getattr(module, "set_temporal_alpha", None)
             if callable(setter):
                 setter(alpha)
         if epoch == 0 or epoch == int(warmup_epochs) - 1:
-            print(f"[score-smooth-warmup] epoch={epoch + 1} alpha={alpha:.6g} target={alpha_target}", flush=True)
+            print(f"[trfa-warmup] epoch={epoch + 1} alpha={alpha:.6g} target={alpha_target}", flush=True)
 
     return on_train_epoch_start
 
 
-def set_detect_vid_temporal_fusion(
-    model,
-    mode,
-    score_smooth_sigma=None,
-    score_smooth_cls_gain=None,
-    score_smooth_conf_gain=None,
-    score_smooth_min_ref_score=None,
-):
-    """Set Detect_VID score-smoothing options on a YOLO wrapper or raw model."""
+def set_detect_vid_temporal_fusion(model, mode, trfa_levels=None):
+    """Set Detect_VID temporal residual feature adapter options."""
     try:
         from ultralytics.nn.modules import Detect_VID
     except Exception:
@@ -299,14 +266,8 @@ def set_detect_vid_temporal_fusion(
         for module in root.modules():
             if isinstance(module, Detect_VID):
                 module.temporal_fusion = mode
-                if score_smooth_sigma is not None:
-                    module.score_smooth_sigma = float(score_smooth_sigma)
-                if score_smooth_cls_gain is not None:
-                    module.score_smooth_cls_gain = float(score_smooth_cls_gain)
-                if score_smooth_conf_gain is not None:
-                    module.score_smooth_conf_gain = float(score_smooth_conf_gain)
-                if score_smooth_min_ref_score is not None:
-                    module.score_smooth_min_ref_score = float(score_smooth_min_ref_score)
+                if trfa_levels is not None:
+                    module.trfa_levels = str(trfa_levels)
                 count += 1
     return count
 
@@ -421,19 +382,16 @@ def parse_opt():
     parser.add_argument('--half', action='store_true', help='use FP16 half-precision inference')
     parser.add_argument('--dnn', action='store_true', help='use OpenCV DNN for ONNX inference')
     # VID clip-mode (consumed by VIDClipDataset when data yaml has task: vid)
-    parser.add_argument('--num_ref_frames', type=int, default=4, help='reference frames per clip for VIDClipDataset (0 disables temporal smoothing)')
+    parser.add_argument('--num_ref_frames', type=int, default=4, help='reference frames per clip for VIDClipDataset (0 disables temporal adaptation)')
     parser.add_argument('--clip_stride', type=int, default=1, help='temporal stride between sampled refs')
     parser.add_argument('--ref_sample', default='adjacent', choices=['adjacent', 'causal', 'uniform_local', 'uniform_global'], help='ref-frame sampling strategy')
     parser.add_argument('--vid_clip_mode', default='center', choices=['center', 'window'], help='VID training clip layout: center repeats refs; window uses each frame once inside a temporal window')
     parser.add_argument('--vid_window_size', type=int, default=None, help='frames per window when --vid_clip_mode window; defaults to num_ref_frames+1')
     parser.add_argument('--ref_aux_loss', type=float, default=0.0, help='auxiliary detection loss weight for reference frames')
-    parser.add_argument('--temporal_fusion', default='score_smooth', choices=['score_smooth', 'none'], help='Detect_VID temporal fusion mode')
-    parser.add_argument('--score_smooth_sigma', type=float, default=0.03, help='normalized local radius for score_smooth temporal support')
-    parser.add_argument('--score_smooth_cls_gain', type=float, default=0.6, help='class probability temporal smoothing gain for score_smooth')
-    parser.add_argument('--score_smooth_conf_gain', type=float, default=0.7, help='low-current-confidence temporal boost gain for score_smooth')
-    parser.add_argument('--score_smooth_min_ref_score', type=float, default=0.001, help='minimum reference score used by score_smooth')
-    parser.add_argument('--score_smooth_warmup_epochs', type=float, default=0.0, help='linearly warm score smoothing alpha for this many epochs; 0 disables')
-    parser.add_argument('--score_smooth_alpha_target', type=float, default=1.0, help='target score smoothing alpha value at the end of warmup')
+    parser.add_argument('--temporal_fusion', default='trfa', choices=['trfa', 'none'], help='Detect_VID temporal fusion mode')
+    parser.add_argument('--trfa_levels', default='all', choices=['all', 'p3', 'p4', 'p5', 'p3p4', 'p4p5', 'none'], help='feature pyramid levels where temporal residual feature adapter is applied')
+    parser.add_argument('--trfa_warmup_epochs', type=float, default=0.0, help='linearly warm temporal residual adapter alpha for this many epochs; 0 disables')
+    parser.add_argument('--trfa_alpha_target', type=float, default=1.0, help='target temporal residual adapter alpha value at the end of warmup')
     parser.add_argument('--debug_clip_shape', action='store_true', help='print the first training batch image shape and clip layout')
     parser.add_argument('--debug_clip_aug', action='store_true', help='print first few VID clip augmentation decisions')
     parser.add_argument('--debug_clip_refs', action='store_true', help='print first few VID key/ref frame paths and positions')
@@ -480,12 +438,9 @@ if __name__ == '__main__':
         "vid_window_size": opt.vid_window_size or 0,
         "ref_aux_loss": opt.ref_aux_loss,
         "temporal_fusion": opt.temporal_fusion,
-        "score_smooth_sigma": opt.score_smooth_sigma,
-        "score_smooth_cls_gain": opt.score_smooth_cls_gain,
-        "score_smooth_conf_gain": opt.score_smooth_conf_gain,
-        "score_smooth_min_ref_score": opt.score_smooth_min_ref_score,
-        "score_smooth_warmup_epochs": opt.score_smooth_warmup_epochs,
-        "score_smooth_alpha_target": opt.score_smooth_alpha_target,
+        "trfa_levels": opt.trfa_levels,
+        "trfa_warmup_epochs": opt.trfa_warmup_epochs,
+        "trfa_alpha_target": opt.trfa_alpha_target,
         "debug_clip_shape": opt.debug_clip_shape,
         "debug_clip_aug": opt.debug_clip_aug,
         "debug_clip_refs": opt.debug_clip_refs,
@@ -509,15 +464,15 @@ if __name__ == '__main__':
             args[k] = True
     model_path = resolve_path(opt.weights) if opt.weights else resolve_path(opt.config)
     model = YOLO(model_path)
-    set_detect_vid_temporal_fusion(model, opt.temporal_fusion, opt.score_smooth_sigma, opt.score_smooth_cls_gain, opt.score_smooth_conf_gain, opt.score_smooth_min_ref_score)
+    set_detect_vid_temporal_fusion(model, opt.temporal_fusion, opt.trfa_levels)
     if task == "train":
         if opt.init_weights:
             init_weights = resolve_path(opt.init_weights)
             print(f"[init-weights] loading partial weights from {init_weights}", flush=True)
             model.load(init_weights)
-            set_detect_vid_temporal_fusion(model, opt.temporal_fusion, opt.score_smooth_sigma, opt.score_smooth_cls_gain, opt.score_smooth_conf_gain, opt.score_smooth_min_ref_score)
-        if opt.score_smooth_warmup_epochs > 0:
-            model.add_callback("on_train_epoch_start", build_score_smooth_warmup_callback(opt))
+            set_detect_vid_temporal_fusion(model, opt.temporal_fusion, opt.trfa_levels)
+        if opt.trfa_warmup_epochs > 0:
+            model.add_callback("on_train_epoch_start", build_trfa_warmup_callback(opt))
         if opt.extra_eval_period > 0:
             model.add_callback("on_model_save", build_extra_eval_callback(opt))
         args["resume"] = opt.resume

@@ -1,18 +1,18 @@
-# Current Model Structure Marker
+﻿# Current Model Structure Marker
 
 This file marks the model structure currently used as the main VID experiment
 configuration in this repository.
 
-Last updated: 2026-05-14
+Last updated: 2026-05-16
 
 ## Model Name
 
-**Mamba-YOLO-T-VID with lightweight temporal score smoothing**
+**Mamba-YOLO-T-VID with Temporal Residual Feature Adapter**
 
 Short name used in notes:
 
 ```text
-Mamba-YOLO-T-VID-ScoreSmooth-v5
+Mamba-YOLO-T-VID-TRFA-v6
 ```
 
 ## Fixed Backbone and Neck
@@ -26,49 +26,43 @@ Input video window
   -> P3, P4, P5 multi-scale features
 ```
 
-The official Mamba-YOLO backbone and neck do not perform explicit temporal
-fusion and are not structurally modified. Frames in a video window are
-flattened into a normal image batch, so each frame passes through the backbone
-and neck once. The current temporal module is deliberately simple and is
-inserted inside `Detect_VID` after raw class logits are produced.
+The official Mamba-YOLO backbone and neck are not structurally modified. Frames
+in a video window are flattened into a normal image batch, so each frame passes
+through the official backbone and neck once.
 
 ## Current Detection Head Structure
 
 The current main detection head is:
 
 ```text
-Detect_VID Head
-  - Reg branch: cv2 -> bbox distribution
-  - Cls branch: cv3_pre -> class logits
-  - TemporalScoreSmoother
-      - local reference-frame class-probability support
-      - class probability smoothing for nearby grid cells
-      - low-current-confidence positive boost from adjacent frames
-      - no bbox update; current-frame boxes stay primary
-  - Output: original bbox regression + smoothed class logits
+P3/P4/P5 window features
+  -> TemporalResidualFeatureAdapter per level
+       1x1 reduce
+       3D depthwise local temporal-spatial conv
+       1x1 expand
+       residual alpha gate
+  -> original YOLOv8/Mamba-YOLO Detect branches
+       cv2 -> bbox distribution
+       cv3 -> class logits
+  -> output bbox regression + class logits
 ```
 
-The frame-local bbox regression branch is kept unchanged. Temporal information
-is used only at class-score level, which keeps the structure simple and aims
-directly at video metrics such as flicker, ID switches, fragmentation, and
-short confidence drops.
+This replaces the failed score-level smoothing path. Temporal information now
+acts before the bbox/classification branches, so both localization and class
+prediction can learn from nearby frames. The residual gate is initialized as an
+identity path and can be warmed up during training.
 
 ## Current Main Structural Hyperparameters
-
-These hyperparameters define the current main structure:
 
 ```bash
 --vid_clip_mode window
 --vid_window_size 16
 --num_ref_frames 15
---temporal_fusion score_smooth
+--temporal_fusion trfa
+--trfa_levels all
 --ref_aux_loss 0.0
---score_smooth_sigma 0.03
---score_smooth_cls_gain 0.60
---score_smooth_conf_gain 0.70
---score_smooth_min_ref_score 0.001
---score_smooth_warmup_epochs 5
---score_smooth_alpha_target 1.0
+--trfa_warmup_epochs 5
+--trfa_alpha_target 1.0
 ```
 
 ## What These Options Mean
@@ -76,48 +70,20 @@ These hyperparameters define the current main structure:
 `vid_clip_mode=window` means the model uses a consecutive video window, and all
 frames in the window are treated as key frames.
 
-`temporal_fusion=score_smooth` selects a lightweight score-level temporal module.
-For each frame, nearby grid cells from adjacent reference frames provide class
-probability support. The current-frame bbox branch is not modified.
+`temporal_fusion=trfa` selects the temporal residual feature adapter.
 
-`score_smooth_sigma` controls the local feature-cell radius used to borrow
-reference-frame support. `score_smooth_cls_gain` controls how much class
-probabilities are smoothed toward nearby temporal support.
-`score_smooth_conf_gain` controls the positive boost for low-current-confidence
-locations. `score_smooth_min_ref_score` filters weak reference support.
+`trfa_levels=all` applies the adapter to P3, P4, and P5. This is the current main
+setting because the goal is a real video-detection module, not a weak score-only
+post-processing path.
 
-`score_smooth_warmup_epochs` and `score_smooth_alpha_target` warm up the score
-smoothing residual gate.
+`trfa_warmup_epochs` and `trfa_alpha_target` warm up the residual adapter gate.
 
 ## Supported Modes
 
-The current code intentionally supports only two `Detect_VID` modes:
-
 ```text
-score_smooth  -> current lightweight temporal score smoothing head
-none          -> single-frame Detect-like head for ablation
+trfa  -> current temporal residual feature adapter head
+none  -> single-frame Detect-like head for ablation
 ```
 
-For thesis figures and main experiment descriptions, use the
-`score_smooth` structure above unless a section explicitly describes
-an ablation.
-
-## Current Training Command Identity
-
-The current model structure corresponds to commands that include:
-
-```bash
---vid_clip_mode window \
---vid_window_size 16 \
---num_ref_frames 15 \
---temporal_fusion score_smooth \
---score_smooth_sigma 0.03 \
---score_smooth_cls_gain 0.60 \
---score_smooth_conf_gain 0.70 \
---score_smooth_min_ref_score 0.001 \
---score_smooth_warmup_epochs 5 \
---score_smooth_alpha_target 1.0
-```
-
-If these options are changed, the model head structure or behavior should be
-treated as a different experimental variant.
+For thesis figures and main experiment descriptions, use the `trfa` structure
+above unless a section explicitly describes an ablation.

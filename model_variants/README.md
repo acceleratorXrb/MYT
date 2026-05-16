@@ -8,11 +8,10 @@ Use:
 
 ```bash
 python tools/model_variant.py list
-python tools/model_variant.py show yolov_proposal_v2_2026-05-13
-python tools/model_variant.py train-command yolov_proposal_v2_2026-05-13
+python tools/model_variant.py show temporal_residual_v6_2026-05-16
+python tools/model_variant.py train-command temporal_residual_v6_2026-05-16
 ```
 
 When a new architecture stage becomes important, add a new YAML file here
 instead of overwriting an older one. This makes thesis ablations and historical
 model rollback much easier.
-
