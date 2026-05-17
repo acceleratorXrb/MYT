@@ -110,6 +110,7 @@ using stable tubelet ids for MOT/ID evaluation.
 --ttrm_vote_gain 0.75
 --ttrm_recall_gain 0.65
 --ttrm_input_topk 180
+--debug_ttrm
 ```
 
 ## What These Options Mean

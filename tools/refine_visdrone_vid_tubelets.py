@@ -88,6 +88,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--recall_gain", type=float, default=0.65, help="Score propagation gain from tubelet max score.")
     p.add_argument("--input_topk", type=int, default=180, help="Maximum raw detections kept per frame before association.")
     p.add_argument("--max_per_frame", type=int, default=300, help="Maximum refined outputs per frame.")
+    p.add_argument("--debug", action="store_true", help="Print per-sequence TTRM sanity summaries.")
+    p.add_argument("--debug_sequences", type=int, default=3, help="Number of sequences to print when --debug is enabled.")
     return p.parse_args()
 
 
@@ -153,16 +155,27 @@ def association_score(tube: Tubelet, det: Detection, args: argparse.Namespace) -
     return 0.70 * ov + 0.25 * center_affinity + 0.12 * same_cls + 0.08 * det.score - gap_penalty
 
 
-def build_tubelets(by_frame: dict[int, list[Detection]], args: argparse.Namespace) -> list[Tubelet]:
+def build_tubelets(by_frame: dict[int, list[Detection]], args: argparse.Namespace) -> tuple[list[Tubelet], dict]:
     tubelets: list[Tubelet] = []
     active: list[Tubelet] = []
     next_id = 1
+    stats = {
+        "frames_seen": len(by_frame),
+        "raw_candidates_after_score": 0,
+        "candidates_used_after_topk": 0,
+        "candidates_dropped_by_topk": 0,
+        "associations": 0,
+        "new_tubelets": 0,
+    }
 
     for frame in sorted(by_frame):
         detections = [d for d in by_frame[frame] if d.score >= args.attach_score]
         detections.sort(key=lambda d: d.score, reverse=True)
+        stats["raw_candidates_after_score"] += len(detections)
         if args.input_topk > 0:
+            stats["candidates_dropped_by_topk"] += max(0, len(detections) - args.input_topk)
             detections = detections[: args.input_topk]
+        stats["candidates_used_after_topk"] += len(detections)
         active = [t for t in active if frame - t.last_frame <= args.max_gap]
 
         candidates: list[tuple[float, int, int]] = []
@@ -181,6 +194,7 @@ def build_tubelets(by_frame: dict[int, list[Detection]], args: argparse.Namespac
             active[ti].dets.append(detections[di])
             used_tubes.add(ti)
             used_dets.add(di)
+            stats["associations"] += 1
 
         for di, det in enumerate(detections):
             if di in used_dets or det.score < args.seed_score:
@@ -189,8 +203,9 @@ def build_tubelets(by_frame: dict[int, list[Detection]], args: argparse.Namespac
             next_id += 1
             tubelets.append(tube)
             active.append(tube)
+            stats["new_tubelets"] += 1
 
-    return tubelets
+    return tubelets, stats
 
 
 def interpolate_gap(left: Detection, right: Detection) -> list[Detection]:
@@ -217,15 +232,18 @@ def interpolate_gap(left: Detection, right: Detection) -> list[Detection]:
     return out
 
 
-def refine_tubelet(tube: Tubelet, args: argparse.Namespace) -> Tubelet:
+def refine_tubelet(tube: Tubelet, args: argparse.Namespace) -> tuple[Tubelet, dict]:
     dets = sorted(tube.dets, key=lambda d: d.frame)
     filled: list[Detection] = []
+    interpolated = 0
     for i, det in enumerate(dets):
         if i:
             prev = dets[i - 1]
             gap = det.frame - prev.frame - 1
             if 0 < gap <= args.gap_fill:
-                filled.extend(interpolate_gap(prev, det))
+                gap_dets = interpolate_gap(prev, det)
+                interpolated += len(gap_dets)
+                filled.extend(gap_dets)
         filled.append(det)
 
     votes: Counter[int] = Counter()
@@ -238,18 +256,26 @@ def refine_tubelet(tube: Tubelet, args: argparse.Namespace) -> Tubelet:
 
     refined: list[Detection] = []
     smooth_box = None
+    category_changed = 0
+    score_increased = 0
+    smoothed_boxes = 0
     for det in filled:
         box = det.box.astype(np.float32)
         if smooth_box is None:
             smooth_box = box
         else:
             smooth_box = args.smooth * smooth_box + (1.0 - args.smooth) * box
+            smoothed_boxes += 1
         x1, y1, x2, y2 = smooth_box.tolist()
         category = majority_cat
+        if det.category != majority_cat:
+            category_changed += 1
         vote_boost = args.vote_gain * vote_ratio if det.category == majority_cat else args.vote_gain * 0.5 * vote_ratio
         propagated = det.score + 0.5 * args.recall_gain * max(0.0, max_score - det.score)
         score = propagated + (1.0 - propagated) * min(vote_boost * 0.35, 0.5)
         score = min(0.999999, max(score, det.score))
+        if score > det.score + 1e-6:
+            score_increased += 1
         refined.append(
             Detection(
                 frame=det.frame,
@@ -262,7 +288,16 @@ def refine_tubelet(tube: Tubelet, args: argparse.Namespace) -> Tubelet:
                 source=det.source,
             )
         )
-    return Tubelet(tube.tid, refined)
+    return Tubelet(tube.tid, refined), {
+        "interpolated_detections": interpolated,
+        "category_changed": category_changed,
+        "score_increased": score_increased,
+        "smoothed_boxes": smoothed_boxes,
+        "majority_category": majority_cat,
+        "vote_ratio": vote_ratio,
+        "raw_len": len(dets),
+        "refined_len": len(refined),
+    }
 
 
 def keep_tubelet(tube: Tubelet, args: argparse.Namespace) -> bool:
@@ -295,8 +330,10 @@ def cap_per_frame(items: list[tuple[int, Detection]], max_per_frame: int) -> lis
 
 def refine_sequence(path: Path, args: argparse.Namespace) -> dict:
     raw = read_detections(path)
-    tubes = build_tubelets(raw, args)
-    refined = [refine_tubelet(t, args) for t in tubes]
+    tubes, build_stats = build_tubelets(raw, args)
+    refined_pairs = [refine_tubelet(t, args) for t in tubes]
+    refine_stats = [s for _, s in refined_pairs]
+    refined = [t for t, _ in refined_pairs]
     refined = [t for t in refined if keep_tubelet(t, args)]
 
     det_items: list[tuple[int, Detection]] = []
@@ -319,6 +356,20 @@ def refine_sequence(path: Path, args: argparse.Namespace) -> dict:
         "".join(format_line(det, tid) for tid, det in track_items), encoding="utf-8"
     )
     raw_count = sum(len(v) for v in raw.values())
+    raw_frames = len(raw)
+    refined_frames = len({det.frame for _, det in det_items})
+    tube_lengths = [len(t.dets) for t in refined]
+    stats = {
+        **build_stats,
+        "raw_frames": raw_frames,
+        "refined_frames": refined_frames,
+        "interpolated_detections": sum(s["interpolated_detections"] for s in refine_stats),
+        "category_changed": sum(s["category_changed"] for s in refine_stats),
+        "score_increased": sum(s["score_increased"] for s in refine_stats),
+        "smoothed_boxes": sum(s["smoothed_boxes"] for s in refine_stats),
+        "avg_kept_tubelet_len": float(np.mean(tube_lengths)) if tube_lengths else 0.0,
+        "max_kept_tubelet_len": max(tube_lengths) if tube_lengths else 0,
+    }
     return {
         "sequence": path.stem,
         "raw_detections": raw_count,
@@ -326,6 +377,7 @@ def refine_sequence(path: Path, args: argparse.Namespace) -> dict:
         "kept_tubelets": len(refined),
         "refined_detections": len(det_items),
         "refined_tracks": len(track_items),
+        **stats,
     }
 
 
@@ -341,9 +393,38 @@ def main() -> None:
         "kept_tubelets": sum(x["kept_tubelets"] for x in per_seq),
         "refined_detections": sum(x["refined_detections"] for x in per_seq),
         "refined_tracks": sum(x["refined_tracks"] for x in per_seq),
+        "raw_frames": sum(x["raw_frames"] for x in per_seq),
+        "refined_frames": sum(x["refined_frames"] for x in per_seq),
+        "associations": sum(x["associations"] for x in per_seq),
+        "interpolated_detections": sum(x["interpolated_detections"] for x in per_seq),
+        "category_changed": sum(x["category_changed"] for x in per_seq),
+        "score_increased": sum(x["score_increased"] for x in per_seq),
+        "smoothed_boxes": sum(x["smoothed_boxes"] for x in per_seq),
+        "candidates_dropped_by_topk": sum(x["candidates_dropped_by_topk"] for x in per_seq),
     }
+    totals["refined_per_raw_ratio"] = totals["refined_detections"] / max(totals["raw_detections"], 1)
+    totals["frame_coverage_ratio"] = totals["refined_frames"] / max(totals["raw_frames"], 1)
+    warnings = []
+    if totals["raw_detections"] > 0 and totals["refined_detections"] == 0:
+        warnings.append("TTRM produced zero refined detections from non-empty raw detections.")
+    if totals["tubelets"] > 0 and totals["kept_tubelets"] == 0:
+        warnings.append("TTRM built tubelets but all were filtered out.")
+    if totals["frame_coverage_ratio"] < 0.25:
+        warnings.append("TTRM refined frame coverage is very low; thresholds may be too strict.")
     payload = {"method": "TTRM", "args": vars(args) | {"pred": str(args.pred), "out_det": str(args.out_det), "out_tracks": str(args.out_tracks), "summary": str(args.summary) if args.summary else None}, "totals": totals, "per_seq": per_seq}
-    print(json.dumps({"method": "TTRM", "totals": totals}, indent=2))
+    if warnings:
+        payload["warnings"] = warnings
+    print(json.dumps({"method": "TTRM", "totals": totals, "warnings": warnings}, indent=2))
+    if args.debug:
+        for item in per_seq[: max(0, args.debug_sequences)]:
+            print(
+                "[ttrm-debug] "
+                f"seq={item['sequence']} raw={item['raw_detections']} refined={item['refined_detections']} "
+                f"tubelets={item['tubelets']}/{item['kept_tubelets']} assoc={item['associations']} "
+                f"interp={item['interpolated_detections']} cls_fix={item['category_changed']} "
+                f"score_up={item['score_increased']} coverage={item['refined_frames']}/{item['raw_frames']}",
+                flush=True,
+            )
     if args.summary is not None:
         args.summary.parent.mkdir(parents=True, exist_ok=True)
         args.summary.write_text(json.dumps(payload, indent=2, default=str) + "\n", encoding="utf-8")

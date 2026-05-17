@@ -163,52 +163,49 @@ def build_extra_eval_callback(opt):
             steps.append(run_extra_eval_step("export_detections", export_cmd, strict))
 
             if opt.extra_eval_ttrm:
-                steps.append(
-                    run_extra_eval_step(
-                        "ttrm",
-                        [
-                            py,
-                            scripts / "refine_visdrone_vid_tubelets.py",
-                            "--pred",
-                            raw_detections_dir,
-                            "--out_det",
-                            detections_dir,
-                            "--out_tracks",
-                            tracks_dir,
-                            "--summary",
-                            ttrm_json,
-                            "--seed_score",
-                            opt.ttrm_seed_score,
-                            "--attach_score",
-                            opt.ttrm_attach_score,
-                            "--keep_score",
-                            opt.ttrm_keep_score,
-                            "--track_min_len",
-                            opt.ttrm_track_min_len,
-                            "--track_min_score",
-                            opt.ttrm_track_min_score,
-                            "--assoc_iou",
-                            opt.ttrm_assoc_iou,
-                            "--assoc_center_factor",
-                            opt.ttrm_assoc_center_factor,
-                            "--max_gap",
-                            opt.ttrm_max_gap,
-                            "--gap_fill",
-                            opt.ttrm_gap_fill,
-                            "--smooth",
-                            opt.ttrm_smooth,
-                            "--vote_gain",
-                            opt.ttrm_vote_gain,
-                            "--recall_gain",
-                            opt.ttrm_recall_gain,
-                            "--input_topk",
-                            opt.ttrm_input_topk,
-                            "--max_per_frame",
-                            opt.ttrm_max_per_frame,
-                        ],
-                        strict,
-                    )
-                )
+                ttrm_cmd = [
+                    py,
+                    scripts / "refine_visdrone_vid_tubelets.py",
+                    "--pred",
+                    raw_detections_dir,
+                    "--out_det",
+                    detections_dir,
+                    "--out_tracks",
+                    tracks_dir,
+                    "--summary",
+                    ttrm_json,
+                    "--seed_score",
+                    opt.ttrm_seed_score,
+                    "--attach_score",
+                    opt.ttrm_attach_score,
+                    "--keep_score",
+                    opt.ttrm_keep_score,
+                    "--track_min_len",
+                    opt.ttrm_track_min_len,
+                    "--track_min_score",
+                    opt.ttrm_track_min_score,
+                    "--assoc_iou",
+                    opt.ttrm_assoc_iou,
+                    "--assoc_center_factor",
+                    opt.ttrm_assoc_center_factor,
+                    "--max_gap",
+                    opt.ttrm_max_gap,
+                    "--gap_fill",
+                    opt.ttrm_gap_fill,
+                    "--smooth",
+                    opt.ttrm_smooth,
+                    "--vote_gain",
+                    opt.ttrm_vote_gain,
+                    "--recall_gain",
+                    opt.ttrm_recall_gain,
+                    "--input_topk",
+                    opt.ttrm_input_topk,
+                    "--max_per_frame",
+                    opt.ttrm_max_per_frame,
+                ]
+                if opt.debug_ttrm:
+                    ttrm_cmd.append("--debug")
+                steps.append(run_extra_eval_step("ttrm", ttrm_cmd, strict))
 
             steps.append(
                 run_extra_eval_step(
@@ -479,6 +476,7 @@ def parse_opt():
     parser.add_argument('--debug_clip_aug', action='store_true', help='print first few VID clip augmentation decisions')
     parser.add_argument('--debug_clip_refs', action='store_true', help='print first few VID key/ref frame paths and positions')
     parser.add_argument('--debug_vid_head', action='store_true', help='print first few Detect_VID temporal head shapes and ref indices')
+    parser.add_argument('--debug_ttrm', action='store_true', help='print TTRM per-sequence sanity summaries during extra evaluation')
     # Optional heavier video metrics, run after checkpoint save every N epochs.
     parser.add_argument('--extra_eval_period', type=int, default=1, help='run flicker/MOT video eval every N epochs; 0 disables')
     parser.add_argument('--extra_eval_official_root', default='datasets/VisDrone-VID/raw/VisDrone2019-VID-val', help='official VisDrone-VID split root with annotations/ and sequences/')

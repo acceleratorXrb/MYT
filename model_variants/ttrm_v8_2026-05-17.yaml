@@ -74,6 +74,7 @@ main_hyperparameters:
   ttrm_recall_gain: 0.65
   ttrm_input_topk: 180
   ttrm_max_per_frame: 300
+  debug_ttrm: true
 
 training_command:
   - python
@@ -143,6 +144,7 @@ training_command:
   - --extra_eval_clip_inference
   - --extra_eval_window_inference
   - --extra_eval_ttrm
+  - --debug_ttrm
   - --ttrm_seed_score
   - "0.05"
   - --ttrm_attach_score

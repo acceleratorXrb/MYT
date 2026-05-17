@@ -175,6 +175,7 @@ These options define `Mamba-YOLO-T-VID-TTRM-v8`:
 --ttrm_vote_gain 0.75
 --ttrm_recall_gain 0.65
 --ttrm_input_topk 180
+--debug_ttrm
 ```
 
 If these options or the head structure change substantially, treat the result as
@@ -204,6 +205,12 @@ Periodic extra evaluation also writes detection export speed to
 `speed`. The reported `detection_export_fps` is measured after model loading and
 includes preprocessing, model inference, NMS, and result txt export; it does not
 include flicker/MOT metric computation.
+
+For runtime sanity checks, add `--debug_clip_shape --debug_clip_refs
+--debug_vid_head --debug_ttrm` to a short 1-epoch run. `--debug_ttrm` prints
+per-sequence counts for raw detections, refined detections, tubelets,
+associations, interpolated gaps, class fixes, and score propagation. The same
+statistics are always saved to `extra_eval/epochXXX/ttrm.json`.
 
 ## Experiment Notes
 
