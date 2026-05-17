@@ -28,6 +28,20 @@ import torch.nn.functional as F
 from .dataset import YOLODataset
 
 
+VISDRONE_CATEGORY_TO_YOLO = {
+    1: 0,
+    2: 1,
+    3: 2,
+    4: 3,
+    5: 4,
+    6: 5,
+    7: 6,
+    8: 7,
+    9: 8,
+    10: 9,
+}
+
+
 class VIDClipDataset(YOLODataset):
     """YOLO video clip dataset for VID training.
 
@@ -73,6 +87,10 @@ class VIDClipDataset(YOLODataset):
         self._vid_seq_key = seq_key
         super().__init__(*args, **kwargs)
         self._build_seq_index()
+        self._build_track_index()
+        if self._debug_clip_refs:
+            loaded = sum(1 for v in self.track_ids_by_index.values() if len(v))
+            print(f"[debug-vid-track] loaded_track_id_frames={loaded}/{len(self.im_files)}", flush=True)
         self._build_windows()
 
     def __len__(self):
@@ -116,6 +134,75 @@ class VIDClipDataset(YOLODataset):
         for name, idxs in self.seqs.items():
             for pos, idx in enumerate(idxs):
                 self.idx2seqpos[idx] = (name, pos)
+
+    def _annotation_root_candidates(self) -> list[Path]:
+        roots = []
+        split = None
+        if self.im_files:
+            image_path = Path(self.im_files[0]).resolve()
+            parts = image_path.parts
+            if "images" in parts:
+                i = parts.index("images")
+                if i + 1 < len(parts):
+                    split = parts[i + 1]
+                    dataset_root = Path(*parts[:i])
+                    roots.append(dataset_root / "raw" / f"VisDrone2019-VID-{split}" / "annotations")
+                    roots.append(dataset_root.parent / "raw" / f"VisDrone2019-VID-{split}" / "annotations")
+        data_root = self.data.get("path") if isinstance(getattr(self, "data", None), dict) else None
+        if data_root and split:
+            roots.append(Path(data_root) / "raw" / f"VisDrone2019-VID-{split}" / "annotations")
+        out = []
+        for r in roots:
+            if r not in out:
+                out.append(r)
+        return out
+
+    def _build_track_index(self) -> None:
+        """Map image index to VisDrone track ids aligned with unaugmented label order."""
+        self.track_ids_by_index: dict[int, torch.Tensor] = {}
+        ann_roots = [r for r in self._annotation_root_candidates() if r.is_dir()]
+        if not ann_roots:
+            return
+        ann_root = ann_roots[0]
+        for seq_name, idxs in self.seqs.items():
+            ann_file = ann_root / f"{seq_name}.txt"
+            if not ann_file.exists():
+                continue
+            by_frame: dict[int, list[int]] = defaultdict(list)
+            with ann_file.open("r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    fields = [x.strip() for x in line.split(",")]
+                    if len(fields) < 8:
+                        continue
+                    frame_id = int(float(fields[0]))
+                    track_id = int(float(fields[1]))
+                    width = float(fields[4])
+                    height = float(fields[5])
+                    score = float(fields[6])
+                    category = int(float(fields[7]))
+                    if (
+                        score <= 0
+                        or track_id < 0
+                        or width <= 0
+                        or height <= 0
+                        or category not in VISDRONE_CATEGORY_TO_YOLO
+                    ):
+                        continue
+                    by_frame[frame_id].append(track_id)
+            for frame_id, idx in enumerate(idxs, start=1):
+                self.track_ids_by_index[idx] = torch.tensor(by_frame.get(frame_id, []), dtype=torch.long)
+
+    def _attach_track_ids(self, sample: dict, idx: int) -> dict:
+        ids = self.track_ids_by_index.get(idx)
+        n = len(sample.get("cls", []))
+        if ids is not None and len(ids) == n:
+            sample["track_ids"] = ids.to(dtype=torch.long)
+        else:
+            sample["track_ids"] = torch.full((n,), -1, dtype=torch.long)
+        return sample
 
     def _build_windows(self) -> None:
         self.windows: list[list[int]] = []
@@ -207,14 +294,14 @@ class VIDClipDataset(YOLODataset):
     def _get_sync_aug_sample(self, idx: int, seed: int):
         """Load one frame while replaying the same random augment decisions for a clip."""
         if not self.augment:
-            return super().__getitem__(idx)
+            return self._attach_track_ids(super().__getitem__(idx), idx)
 
         py_state = random.getstate()
         np_state = np.random.get_state()
         random.seed(seed)
         np.random.seed(seed % (2**32))
         try:
-            return super().__getitem__(idx)
+            return self._attach_track_ids(super().__getitem__(idx), idx)
         finally:
             random.setstate(py_state)
             np.random.set_state(np_state)
@@ -232,6 +319,7 @@ class VIDClipDataset(YOLODataset):
             key_sample["ref_cls"] = torch.zeros((0, 1), dtype=key_sample["cls"].dtype)
             key_sample["ref_bboxes"] = torch.zeros((0, 4), dtype=key_sample["bboxes"].dtype)
             key_sample["ref_batch_idx"] = torch.zeros((0,), dtype=key_sample["batch_idx"].dtype)
+            key_sample["ref_track_ids"] = torch.zeros((0,), dtype=torch.long)
             return key_sample
 
         ref_idxs = self._sample_refs(idx)
@@ -240,6 +328,7 @@ class VIDClipDataset(YOLODataset):
         ref_cls = []
         ref_bboxes = []
         ref_batch_idx = []
+        ref_track_ids = []
         for ref_pos, r_idx in enumerate(ref_idxs):
             r_sample = self._get_sync_aug_sample(r_idx, aug_seed)
             ref_imgs.append(r_sample["img"])  # (3, H, W) tensor
@@ -247,6 +336,7 @@ class VIDClipDataset(YOLODataset):
                 ref_cls.append(r_sample["cls"])
                 ref_bboxes.append(r_sample["bboxes"])
                 ref_batch_idx.append(torch.full((len(r_sample["cls"]),), ref_pos, dtype=r_sample["batch_idx"].dtype))
+                ref_track_ids.append(r_sample.get("track_ids", torch.full((len(r_sample["cls"]),), -1, dtype=torch.long)))
 
         # Stack: key first, then refs -> (T, 3, H, W)
         clip = torch.stack([key_sample["img"]] + ref_imgs, dim=0)
@@ -261,6 +351,7 @@ class VIDClipDataset(YOLODataset):
         key_sample["ref_batch_idx"] = (
             torch.cat(ref_batch_idx, 0) if ref_batch_idx else torch.zeros((0,), dtype=key_sample["batch_idx"].dtype)
         )
+        key_sample["ref_track_ids"] = torch.cat(ref_track_ids, 0) if ref_track_ids else torch.zeros((0,), dtype=torch.long)
         return key_sample
 
     def _build_window(self, window_idx: int):
@@ -269,12 +360,13 @@ class VIDClipDataset(YOLODataset):
         samples = [self._get_sync_aug_sample(i, aug_seed) for i in frame_idxs]
         clip = torch.stack([s["img"] for s in samples], dim=0)
         first = samples[0]
-        cls, bboxes, batch_idx = [], [], []
+        cls, bboxes, batch_idx, track_ids = [], [], [], []
         for pos, s in enumerate(samples):
             if s.get("cls") is not None and len(s["cls"]):
                 cls.append(s["cls"])
                 bboxes.append(s["bboxes"])
                 batch_idx.append(torch.full((len(s["cls"]),), pos, dtype=s["batch_idx"].dtype))
+                track_ids.append(s.get("track_ids", torch.full((len(s["cls"]),), -1, dtype=torch.long)))
         first["img"] = clip
         first["clip_T"] = clip.shape[0]
         first["clip_all_keys"] = True
@@ -282,9 +374,11 @@ class VIDClipDataset(YOLODataset):
         first["cls"] = torch.cat(cls, 0) if cls else torch.zeros((0, 1), dtype=first["cls"].dtype)
         first["bboxes"] = torch.cat(bboxes, 0) if bboxes else torch.zeros((0, 4), dtype=first["bboxes"].dtype)
         first["batch_idx"] = torch.cat(batch_idx, 0) if batch_idx else torch.zeros((0,), dtype=first["batch_idx"].dtype)
+        first["track_ids"] = torch.cat(track_ids, 0) if track_ids else torch.zeros((0,), dtype=torch.long)
         first["ref_cls"] = torch.zeros((0, 1), dtype=first["cls"].dtype)
         first["ref_bboxes"] = torch.zeros((0, 4), dtype=first["bboxes"].dtype)
         first["ref_batch_idx"] = torch.zeros((0,), dtype=first["batch_idx"].dtype)
+        first["ref_track_ids"] = torch.zeros((0,), dtype=torch.long)
 
         if self._debug_clip_refs and self._debug_clip_refs_printed < 5:
             paths = [self.im_files[i] for i in frame_idxs]
@@ -374,6 +468,8 @@ class VIDClipDataset(YOLODataset):
         sample["img"] = out
         sample["cls"], sample["bboxes"] = self._merge_label_tensors(samples, boxes)
         sample["ref_cls"], sample["ref_bboxes"], sample["ref_batch_idx"] = self._merge_ref_label_tensors(samples, ref_boxes)
+        sample["track_ids"] = torch.full((len(sample["cls"]),), -1, dtype=torch.long)
+        sample["ref_track_ids"] = torch.full((len(sample["ref_cls"]),), -1, dtype=torch.long)
         if "batch_idx" in sample:
             sample["batch_idx"] = torch.zeros((len(sample["cls"]),), dtype=sample["batch_idx"].dtype)
         return sample
@@ -386,6 +482,8 @@ class VIDClipDataset(YOLODataset):
         sample["img"] = mixed.round().clamp_(0, 255).to(dtype=sample["img"].dtype)
         sample["cls"], sample["bboxes"] = self._merge_label_tensors([sample, other])
         sample["ref_cls"], sample["ref_bboxes"], sample["ref_batch_idx"] = self._merge_ref_label_tensors([sample, other])
+        sample["track_ids"] = torch.full((len(sample["cls"]),), -1, dtype=torch.long)
+        sample["ref_track_ids"] = torch.full((len(sample["ref_cls"]),), -1, dtype=torch.long)
         if "batch_idx" in sample:
             sample["batch_idx"] = torch.zeros((len(sample["cls"]),), dtype=sample["batch_idx"].dtype)
         return sample
@@ -454,7 +552,18 @@ class VIDClipDataset(YOLODataset):
                 continue  # consumed
             elif k == "clip_all_keys":
                 continue
-            elif k in {"masks", "keypoints", "bboxes", "cls", "segments", "obb", "ref_bboxes", "ref_cls"}:
+            elif k in {
+                "masks",
+                "keypoints",
+                "bboxes",
+                "cls",
+                "segments",
+                "obb",
+                "ref_bboxes",
+                "ref_cls",
+                "track_ids",
+                "ref_track_ids",
+            }:
                 new_batch[k] = torch.cat(value, 0)
             elif k == "im_file" and all_keys:
                 new_batch[k] = [p for paths in value for p in (paths if isinstance(paths, list) else [paths])]

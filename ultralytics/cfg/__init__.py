@@ -106,6 +106,8 @@ CFG_FLOAT_KEYS = {  # integer or float arguments, i.e. x=2 and x=2.0
     "workspace",
     "batch",
     "ref_aux_loss",
+    "track_recall_loss",
+    "track_consistency_loss",
     "trfa_warmup_epochs",
     "trfa_alpha_target",
 }

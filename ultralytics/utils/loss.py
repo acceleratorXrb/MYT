@@ -261,8 +261,68 @@ class v8VIDDetectionLoss(v8DetectionLoss):
         super().__init__(model)
         self.model = model
 
+    def _track_tube_loss(self, feats, batch):
+        """Use VisDrone track_id tubes to supervise class recall and temporal score continuity."""
+        recall_gain = float(getattr(self.hyp, "track_recall_loss", 0.0) or 0.0)
+        consistency_gain = float(getattr(self.hyp, "track_consistency_loss", 0.0) or 0.0)
+        if recall_gain <= 0.0 and consistency_gain <= 0.0:
+            return None
+        if (
+            "track_ids" not in batch
+            or "clip_layout" not in batch
+            or "clip_all_keys" not in batch
+            or int(batch["clip_all_keys"].view(-1)[0].item()) != 1
+        ):
+            return None
+
+        batch_idx = batch["batch_idx"].to(self.device).long().view(-1)
+        cls = batch["cls"].to(self.device).long().view(-1)
+        bboxes = batch["bboxes"].to(self.device)
+        track_ids = batch["track_ids"].to(self.device).long().view(-1)
+        if not (len(batch_idx) and len(cls) == len(batch_idx) and len(bboxes) == len(batch_idx) and len(track_ids) == len(batch_idx)):
+            return None
+        valid = (track_ids >= 0) & (cls >= 0) & (cls < self.nc)
+        if valid.sum() < 2:
+            return None
+        batch_idx = batch_idx[valid]
+        cls = cls[valid]
+        bboxes = bboxes[valid].clamp(0.0, 1.0)
+        track_ids = track_ids[valid]
+
+        per_level_logits = []
+        for feat in feats:
+            _, _, h, w = feat.shape
+            cls_logits = feat[:, self.reg_max * 4 :, :, :]
+            bi = batch_idx.clamp_(0, cls_logits.shape[0] - 1)
+            x = (bboxes[:, 0] * w).long().clamp_(0, w - 1)
+            y = (bboxes[:, 1] * h).long().clamp_(0, h - 1)
+            per_level_logits.append(cls_logits[bi, :, y, x])
+        logits = torch.stack(per_level_logits, dim=0).mean(0)
+
+        recall_loss = F.cross_entropy(logits, cls, reduction="mean")
+        gt_logits = logits[torch.arange(len(cls), device=self.device), cls]
+        gt_prob = gt_logits.sigmoid()
+
+        T = int(batch["clip_layout"].view(-1)[1].item())
+        window_ids = torch.div(batch_idx, max(T, 1), rounding_mode="floor")
+        group_ids = window_ids * 10000000 + track_ids
+        continuity_terms = []
+        for gid in torch.unique(group_ids):
+            mask = group_ids == gid
+            if mask.sum() < 2:
+                continue
+            p = gt_prob[mask]
+            target = p.max().detach()
+            continuity_terms.append(torch.relu(target - p).pow(2).mean())
+        if continuity_terms:
+            consistency_loss = torch.stack(continuity_terms).mean()
+        else:
+            consistency_loss = gt_prob.new_zeros(())
+        return recall_loss, consistency_loss
+
     def __call__(self, preds, batch):
         total_loss, loss_items = super().__call__(preds, batch)
+        feats = preds[1] if isinstance(preds, tuple) else preds
         aux_gain = float(getattr(self.hyp, "ref_aux_loss", 0.0) or 0.0)
         if str(getattr(self.hyp, "vid_clip_mode", "center") or "center").lower() == "window":
             aux_gain = 0.0
@@ -291,6 +351,15 @@ class v8VIDDetectionLoss(v8DetectionLoss):
                 extra_items.append(zeros)
 
 
+        tube = self._track_tube_loss(feats, batch)
+        if tube is not None:
+            recall_loss, consistency_loss = tube
+            recall_gain = float(getattr(self.hyp, "track_recall_loss", 0.0) or 0.0)
+            consistency_gain = float(getattr(self.hyp, "track_consistency_loss", 0.0) or 0.0)
+            scaled_recall = recall_gain * recall_loss
+            scaled_consistency = consistency_gain * consistency_loss
+            total_loss = total_loss + feats[0].shape[0] * (scaled_recall + scaled_consistency)
+            extra_items.append(torch.stack((scaled_recall.detach(), scaled_consistency.detach())))
 
         if extra_items:
             return total_loss, torch.cat((loss_items, *extra_items))

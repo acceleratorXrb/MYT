@@ -7,12 +7,12 @@ Last updated: 2026-05-16
 
 ## Model Name
 
-**Mamba-YOLO-T-VID with Temporal Residual Feature Adapter**
+**Mamba-YOLO-T-VID with TRFA and Track-ID Tube Supervision**
 
 Short name used in notes:
 
 ```text
-Mamba-YOLO-T-VID-TRFA-v6
+Mamba-YOLO-T-VID-TrackTube-v7
 ```
 
 ## Fixed Backbone and Neck
@@ -52,6 +52,25 @@ acts before the bbox/classification branches, so both localization and class
 prediction can learn from nearby frames. The residual gate is initialized as an
 identity path and can be warmed up during training.
 
+## Current Training-Time Video Supervision
+
+The current main training objective additionally uses VisDrone `track_id`
+annotations. During 16-frame window training, the dataset reads raw
+`VisDrone2019-VID-*/annotations/*.txt`, attaches `track_ids` to labels, and the
+VID loss builds object tubes inside each window.
+
+```text
+GT labels with track_id
+  -> group by (window, track_id)
+  -> sample Detect_VID class logits at GT box centers on P3/P4/P5
+  -> tube class recall loss
+  -> same-track confidence continuity loss
+```
+
+This is the current primary video-metric optimization path. It directly targets
+missed detections, class flicker, and track fragmentation instead of relying on
+feature fusion alone.
+
 ## Current Main Structural Hyperparameters
 
 ```bash
@@ -63,6 +82,8 @@ identity path and can be warmed up during training.
 --ref_aux_loss 0.0
 --trfa_warmup_epochs 5
 --trfa_alpha_target 1.0
+--track_recall_loss 0.5
+--track_consistency_loss 0.2
 ```
 
 ## What These Options Mean
@@ -77,6 +98,12 @@ setting because the goal is a real video-detection module, not a weak score-only
 post-processing path.
 
 `trfa_warmup_epochs` and `trfa_alpha_target` warm up the residual adapter gate.
+
+`track_recall_loss` encourages each GT object in a track tube to keep a strong
+class response at its center location.
+
+`track_consistency_loss` pulls lower same-track class confidence toward the best
+same-track confidence inside the window, reducing temporal dropouts.
 
 ## Supported Modes
 

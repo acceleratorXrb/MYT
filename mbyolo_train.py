@@ -405,6 +405,8 @@ def parse_opt():
     parser.add_argument('--vid_clip_mode', default='center', choices=['center', 'window'], help='VID training clip layout: center repeats refs; window uses each frame once inside a temporal window')
     parser.add_argument('--vid_window_size', type=int, default=None, help='frames per window when --vid_clip_mode window; defaults to num_ref_frames+1')
     parser.add_argument('--ref_aux_loss', type=float, default=0.0, help='auxiliary detection loss weight for reference frames')
+    parser.add_argument('--track_recall_loss', type=float, default=0.0, help='track-id tube class recall loss weight for VID window training')
+    parser.add_argument('--track_consistency_loss', type=float, default=0.0, help='same-track temporal confidence consistency loss weight for VID window training')
     parser.add_argument('--temporal_fusion', default='trfa', choices=['trfa', 'none'], help='Detect_VID temporal fusion mode')
     parser.add_argument('--trfa_levels', default='all', choices=['all', 'p3', 'p4', 'p5', 'p3p4', 'p4p5', 'none'], help='feature pyramid levels where temporal residual feature adapter is applied')
     parser.add_argument('--trfa_warmup_epochs', type=float, default=0.0, help='linearly warm temporal residual adapter alpha for this many epochs; 0 disables')
@@ -455,6 +457,8 @@ if __name__ == '__main__':
         "vid_clip_mode": opt.vid_clip_mode,
         "vid_window_size": opt.vid_window_size or 0,
         "ref_aux_loss": opt.ref_aux_loss,
+        "track_recall_loss": opt.track_recall_loss,
+        "track_consistency_loss": opt.track_consistency_loss,
         "temporal_fusion": opt.temporal_fusion,
         "trfa_levels": opt.trfa_levels,
         "trfa_warmup_epochs": opt.trfa_warmup_epochs,

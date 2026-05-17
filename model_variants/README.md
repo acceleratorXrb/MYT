@@ -8,8 +8,8 @@ Use:
 
 ```bash
 python tools/model_variant.py list
-python tools/model_variant.py show temporal_residual_v6_2026-05-16
-python tools/model_variant.py train-command temporal_residual_v6_2026-05-16
+python tools/model_variant.py show track_tube_v7_2026-05-17
+python tools/model_variant.py train-command track_tube_v7_2026-05-17
 ```
 
 When a new architecture stage becomes important, add a new YAML file here

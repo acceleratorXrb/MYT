@@ -1,7 +1,7 @@
-id: temporal_residual_v6_2026-05-16
-date: "2026-05-16"
-name: Mamba-YOLO-T-VID-TRFA-v6
-status: previous_main_archived
+id: track_tube_v7_2026-05-17
+date: "2026-05-17"
+name: Mamba-YOLO-T-VID-TrackTube-v7
+status: current_main
 
 constraint:
   keep_backbone: official Mamba-YOLO-T
@@ -9,6 +9,7 @@ constraint:
   editable_parts:
     - VID input window organization
     - Detect_VID temporal feature adapter
+    - track-id tube supervision in the loss
     - offline video detection / flicker / MOT-ID evaluation path
 
 architecture:
@@ -25,13 +26,12 @@ architecture:
       name: TemporalResidualFeatureAdapter
       placement: before the original Detect bbox/class branches
       levels: P3/P4/P5
-      structure:
-        - 1x1 channel reduction
-        - local 3x3x3 depthwise Conv3d over time/height/width
-        - 1x1 channel expansion
-        - residual alpha gate
-    regression: original YOLOv8/Mamba-YOLO bbox distribution branch after TRFA
-    classification: original YOLOv8/Mamba-YOLO class branch after TRFA
+  track_tube_supervision:
+    source: raw VisDrone2019-VID annotations track_id field
+    placement: v8VIDDetectionLoss
+    losses:
+      - tube class recall loss sampled at GT box centers on P3/P4/P5
+      - same-track confidence continuity loss inside each video window
   output: per-frame bbox regression and class scores from temporally adapted features
 
 main_hyperparameters:
@@ -44,30 +44,9 @@ main_hyperparameters:
   trfa_levels: all
   trfa_warmup_epochs: 5
   trfa_alpha_target: 1.0
+  track_recall_loss: 0.5
+  track_consistency_loss: 0.2
   ref_aux_loss: 0.0
-
-training_base:
-  config: ultralytics/cfg/models/mamba-yolo/Mamba-YOLO-T-VID.yaml
-  data: ultralytics/cfg/datasets/VisDrone-VID.yaml
-  data_task: vid
-  init_weights: output_dir/visdrone_vid/baseline/weights/best.pt
-  optimizer: AdamW
-  lr0: 0.0005
-  lrf: 0.01
-  momentum: 0.937
-  weight_decay: 0.0005
-  warmup_epochs: 3.0
-  warmup_momentum: 0.8
-  warmup_bias_lr: 0.0005
-  box: 7.5
-  cls: 0.5
-  dfl: 1.5
-  epochs: 30
-  imgsz: 640
-  batch_size: 2
-  workers: 8
-  mosaic: 0.0
-  mixup: 0.0
 
 training_command:
   - python
@@ -152,6 +131,10 @@ training_command:
   - adjacent
   - --ref_aux_loss
   - "0.0"
+  - --track_recall_loss
+  - "0.5"
+  - --track_consistency_loss
+  - "0.2"
   - --temporal_fusion
   - trfa
   - --trfa_levels
@@ -169,9 +152,9 @@ training_command:
   - --project
   - output_dir/visdrone_vid
   - --name
-  - trfa_v6
+  - track_tube_v7
 
 notes:
-  - This is the current final version of the simpler temporal-feature idea.
-  - Removed active score-smoothing and proposal-refinement code paths from the train/export interfaces.
-  - The official clean Mamba-YOLO reference remains under third_party/Mamba-YOLO-official.
+  - This is the current main direction: video metrics are optimized with explicit track_id supervision.
+  - The official Mamba-YOLO-T backbone and neck remain unchanged.
+  - If raw VisDrone annotations are missing, track_ids become -1 and tube losses are skipped.

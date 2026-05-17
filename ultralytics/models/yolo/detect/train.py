@@ -144,6 +144,11 @@ class DetectionTrainer(BaseTrainer):
                 and float(getattr(self.args, "ref_aux_loss", 0.0) or 0.0) > 0.0
             ):
                 loss_names.extend(["ref_box_loss", "ref_cls_loss", "ref_dfl_loss"])
+            if (
+                float(getattr(self.args, "track_recall_loss", 0.0) or 0.0) > 0.0
+                or float(getattr(self.args, "track_consistency_loss", 0.0) or 0.0) > 0.0
+            ):
+                loss_names.extend(["tube_cls_loss", "tube_cons_loss"])
         self.loss_names = tuple(loss_names)
         return yolo.detect.DetectionValidator(
             self.test_loader, save_dir=self.save_dir, args=copy(self.args), _callbacks=self.callbacks

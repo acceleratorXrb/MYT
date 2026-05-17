@@ -127,6 +127,8 @@ ref_sample: adjacent # (str) ref-frame sampling: adjacent | causal | uniform_loc
 vid_clip_mode: center # (str) VID training layout: center | window
 vid_window_size: 0 # (int) frames per window when vid_clip_mode=window; 0 defaults to num_ref_frames+1
 ref_aux_loss: 0.0 # (float) auxiliary detection loss weight for reference frames in VID clip training
+track_recall_loss: 0.0 # (float) track-id tube class recall loss weight for VID window training
+track_consistency_loss: 0.0 # (float) same-track temporal confidence consistency loss weight for VID window training
 temporal_fusion: trfa # (str) Detect_VID temporal fusion: trfa | none
 trfa_levels: all # (str) feature pyramid levels for temporal residual feature adapter: all | p3 | p4 | p5 | p3p4 | p4p5 | none
 trfa_warmup_epochs: 0.0 # (float) epochs to linearly warm temporal residual adapter alpha; 0 disables
