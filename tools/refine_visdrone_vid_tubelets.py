@@ -74,20 +74,23 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--out_det", type=Path, required=True, help="Directory for refined detection txt files.")
     p.add_argument("--out_tracks", type=Path, required=True, help="Directory for refined track txt files.")
     p.add_argument("--summary", type=Path, default=None, help="Optional JSON summary path.")
-    p.add_argument("--seed_score", type=float, default=0.05, help="Minimum score for starting a new tubelet.")
-    p.add_argument("--attach_score", type=float, default=0.001, help="Minimum score for attaching to an existing tubelet.")
-    p.add_argument("--keep_score", type=float, default=0.03, help="Minimum refined score to output.")
-    p.add_argument("--track_min_len", type=int, default=2, help="Suppress tubelets shorter than this unless very confident.")
-    p.add_argument("--track_min_score", type=float, default=0.08, help="Minimum max score for output tubelets.")
-    p.add_argument("--assoc_iou", type=float, default=0.18, help="IoU threshold for frame-to-frame association.")
+    p.add_argument("--seed_score", type=float, default=0.12, help="Minimum score for starting a new tubelet.")
+    p.add_argument("--attach_score", type=float, default=0.01, help="Minimum score for attaching to an existing tubelet.")
+    p.add_argument("--keep_score", type=float, default=0.08, help="Minimum refined score to output as a detection.")
+    p.add_argument("--track_keep_score", type=float, default=0.12, help="Minimum refined score to output as a track.")
+    p.add_argument("--track_min_len", type=int, default=4, help="Suppress tubelets shorter than this unless very confident.")
+    p.add_argument("--track_min_score", type=float, default=0.20, help="Minimum max score for output tubelets.")
+    p.add_argument("--track_min_avg_score", type=float, default=0.10, help="Minimum average score for output tubelets.")
+    p.add_argument("--assoc_iou", type=float, default=0.22, help="IoU threshold for frame-to-frame association.")
     p.add_argument("--assoc_center_factor", type=float, default=2.5, help="Center-distance gate in object-scale units.")
-    p.add_argument("--max_gap", type=int, default=3, help="Maximum frame gap for keeping a tubelet active.")
-    p.add_argument("--gap_fill", type=int, default=2, help="Interpolate missing detections for gaps up to this length.")
+    p.add_argument("--max_gap", type=int, default=2, help="Maximum frame gap for keeping a tubelet active.")
+    p.add_argument("--gap_fill", type=int, default=1, help="Interpolate missing detections for gaps up to this length.")
     p.add_argument("--smooth", type=float, default=0.55, help="Box smoothing weight toward the temporal moving average.")
-    p.add_argument("--vote_gain", type=float, default=0.75, help="Class-vote score gain for tubelet majority category.")
-    p.add_argument("--recall_gain", type=float, default=0.65, help="Score propagation gain from tubelet max score.")
-    p.add_argument("--input_topk", type=int, default=180, help="Maximum raw detections kept per frame before association.")
-    p.add_argument("--max_per_frame", type=int, default=300, help="Maximum refined outputs per frame.")
+    p.add_argument("--vote_gain", type=float, default=0.35, help="Class-vote score gain for tubelet majority category.")
+    p.add_argument("--recall_gain", type=float, default=0.25, help="Score propagation gain from tubelet max score.")
+    p.add_argument("--input_topk", type=int, default=60, help="Maximum raw detections kept per frame before association.")
+    p.add_argument("--max_per_frame", type=int, default=80, help="Maximum refined outputs per frame.")
+    p.add_argument("--output_nms_iou", type=float, default=0.65, help="Class-wise NMS IoU for refined per-frame outputs.")
     p.add_argument("--debug", action="store_true", help="Print per-sequence TTRM sanity summaries.")
     p.add_argument("--debug_sequences", type=int, default=3, help="Number of sequences to print when --debug is enabled.")
     return p.parse_args()
@@ -303,6 +306,9 @@ def refine_tubelet(tube: Tubelet, args: argparse.Namespace) -> tuple[Tubelet, di
 def keep_tubelet(tube: Tubelet, args: argparse.Namespace) -> bool:
     if tube.max_score < args.track_min_score:
         return False
+    avg_score = sum(d.score for d in tube.dets) / max(len(tube.dets), 1)
+    if avg_score < args.track_min_avg_score:
+        return False
     if len(tube.dets) >= args.track_min_len:
         return True
     return tube.max_score >= max(args.track_min_score * 2.0, 0.20)
@@ -328,6 +334,23 @@ def cap_per_frame(items: list[tuple[int, Detection]], max_per_frame: int) -> lis
     return kept
 
 
+def nms_per_frame(items: list[tuple[int, Detection]], iou_thr: float) -> list[tuple[int, Detection]]:
+    if iou_thr <= 0:
+        return items
+    grouped: dict[tuple[int, int], list[tuple[int, Detection]]] = defaultdict(list)
+    for item in items:
+        grouped[(item[1].frame, item[1].category)].append(item)
+    kept = []
+    for key in sorted(grouped):
+        candidates = sorted(grouped[key], key=lambda x: x[1].score, reverse=True)
+        selected: list[tuple[int, Detection]] = []
+        for item in candidates:
+            if all(iou(item[1].box, chosen[1].box) < iou_thr for chosen in selected):
+                selected.append(item)
+        kept.extend(selected)
+    return kept
+
+
 def refine_sequence(path: Path, args: argparse.Namespace) -> dict:
     raw = read_detections(path)
     tubes, build_stats = build_tubelets(raw, args)
@@ -340,10 +363,12 @@ def refine_sequence(path: Path, args: argparse.Namespace) -> dict:
     track_items: list[tuple[int, Detection]] = []
     for tube in refined:
         for det in tube.dets:
-            if det.score < args.keep_score:
-                continue
-            det_items.append((-1, det))
-            track_items.append((tube.tid, det))
+            if det.score >= args.keep_score:
+                det_items.append((-1, det))
+            if det.score >= args.track_keep_score:
+                track_items.append((tube.tid, det))
+    det_items = nms_per_frame(det_items, args.output_nms_iou)
+    track_items = nms_per_frame(track_items, args.output_nms_iou)
     det_items = cap_per_frame(det_items, args.max_per_frame)
     track_items = cap_per_frame(track_items, args.max_per_frame)
     det_items.sort(key=lambda x: (x[1].frame, -x[1].score))
@@ -411,6 +436,10 @@ def main() -> None:
         warnings.append("TTRM built tubelets but all were filtered out.")
     if totals["frame_coverage_ratio"] < 0.25:
         warnings.append("TTRM refined frame coverage is very low; thresholds may be too strict.")
+    if totals["refined_tracks"] > totals["raw_frames"] * max(args.max_per_frame, 1):
+        warnings.append("TTRM refined track count exceeds the configured per-frame cap; check output filtering.")
+    if totals["raw_frames"] and totals["refined_tracks"] / totals["raw_frames"] > 120:
+        warnings.append("TTRM is producing unusually many tracks per frame; thresholds may be too loose.")
     payload = {"method": "TTRM", "args": vars(args) | {"pred": str(args.pred), "out_det": str(args.out_det), "out_tracks": str(args.out_tracks), "summary": str(args.summary) if args.summary else None}, "totals": totals, "per_seq": per_seq}
     if warnings:
         payload["warnings"] = warnings
