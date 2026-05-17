@@ -1,7 +1,7 @@
-id: track_tube_v7_2026-05-17
+id: ttrm_v8_2026-05-17
 date: "2026-05-17"
-name: Mamba-YOLO-T-VID-TrackTube-v7
-status: previous_main_archived
+name: Mamba-YOLO-T-VID-TTRM-v8
+status: current_main
 
 constraint:
   keep_backbone: official Mamba-YOLO-T
@@ -10,7 +10,7 @@ constraint:
     - VID input window organization
     - Detect_VID temporal feature adapter
     - track-id tube supervision in the loss
-    - offline video detection / flicker / MOT-ID evaluation path
+    - tubelet-level temporal refinement during video extra evaluation
 
 architecture:
   input: 16-frame VID window
@@ -26,13 +26,25 @@ architecture:
       name: TemporalResidualFeatureAdapter
       placement: before the original Detect bbox/class branches
       levels: P3/P4/P5
-  track_tube_supervision:
+  training_supervision:
     source: raw VisDrone2019-VID annotations track_id field
     placement: v8VIDDetectionLoss
     losses:
       - tube class recall loss sampled at GT box centers on P3/P4/P5
       - same-track confidence continuity loss inside each video window
-  output: per-frame bbox regression and class scores from temporally adapted features
+  video_refinement:
+    name: Temporal Tubelet Refinement Module
+    script: tools/refine_visdrone_vid_tubelets.py
+    placement: after raw detection export and before flicker/MOT evaluation
+    steps:
+      - greedy local association into tubelets
+      - tubelet-level class voting
+      - tubelet-level score propagation
+      - short-gap interpolation for missed frames
+      - light box smoothing along the tubelet
+    outputs:
+      - refined per-frame detections for flicker
+      - refined track txt files with stable tubelet ids for MOT/ID
 
 main_hyperparameters:
   vid_clip_mode: window
@@ -47,6 +59,21 @@ main_hyperparameters:
   track_recall_loss: 0.5
   track_consistency_loss: 0.2
   ref_aux_loss: 0.0
+  extra_eval_ttrm: true
+  ttrm_seed_score: 0.05
+  ttrm_attach_score: 0.001
+  ttrm_keep_score: 0.03
+  ttrm_track_min_len: 2
+  ttrm_track_min_score: 0.08
+  ttrm_assoc_iou: 0.18
+  ttrm_assoc_center_factor: 2.5
+  ttrm_max_gap: 3
+  ttrm_gap_fill: 2
+  ttrm_smooth: 0.55
+  ttrm_vote_gain: 0.75
+  ttrm_recall_gain: 0.65
+  ttrm_input_topk: 180
+  ttrm_max_per_frame: 300
 
 training_command:
   - python
@@ -79,45 +106,13 @@ training_command:
   - "0.0005"
   - --lrf
   - "0.01"
-  - --momentum
-  - "0.937"
-  - --weight_decay
-  - "0.0005"
   - --warmup_epochs
   - "3.0"
-  - --warmup_momentum
-  - "0.8"
   - --warmup_bias_lr
   - "0.0005"
-  - --box
-  - "7.5"
-  - --cls
-  - "0.5"
-  - --dfl
-  - "1.5"
-  - --hsv_h
-  - "0.015"
-  - --hsv_s
-  - "0.7"
-  - --hsv_v
-  - "0.4"
   - --mosaic
   - "0.0"
   - --mixup
-  - "0.0"
-  - --fliplr
-  - "0.5"
-  - --flipud
-  - "0.0"
-  - --degrees
-  - "0.0"
-  - --translate
-  - "0.1"
-  - --scale
-  - "0.5"
-  - --shear
-  - "0.0"
-  - --perspective
   - "0.0"
   - --vid_clip_mode
   - window
@@ -147,14 +142,43 @@ training_command:
   - "1"
   - --extra_eval_clip_inference
   - --extra_eval_window_inference
+  - --extra_eval_ttrm
+  - --ttrm_seed_score
+  - "0.05"
+  - --ttrm_attach_score
+  - "0.001"
+  - --ttrm_keep_score
+  - "0.03"
+  - --ttrm_track_min_len
+  - "2"
+  - --ttrm_track_min_score
+  - "0.08"
+  - --ttrm_assoc_iou
+  - "0.18"
+  - --ttrm_assoc_center_factor
+  - "2.5"
+  - --ttrm_max_gap
+  - "3"
+  - --ttrm_gap_fill
+  - "2"
+  - --ttrm_smooth
+  - "0.55"
+  - --ttrm_vote_gain
+  - "0.75"
+  - --ttrm_recall_gain
+  - "0.65"
+  - --ttrm_input_topk
+  - "180"
+  - --ttrm_max_per_frame
+  - "300"
   - --extra_eval_official_root
   - datasets/VisDrone-VID/raw/VisDrone2019-VID-val
   - --project
   - output_dir/visdrone_vid
   - --name
-  - track_tube_v7
+  - ttrm_v8
 
 notes:
-  - This is the current main direction: video metrics are optimized with explicit track_id supervision.
-  - The official Mamba-YOLO-T backbone and neck remain unchanged.
-  - If raw VisDrone annotations are missing, track_ids become -1 and tube losses are skipped.
+  - This is the current video-metric-first direction.
+  - The backbone, neck, and main detection training path are kept stable.
+  - TTRM is model-agnostic and can also be applied to official Mamba-YOLO-T or YOLOv8 outputs for fair video-stability ablations.

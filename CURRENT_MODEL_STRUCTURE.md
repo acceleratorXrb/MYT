@@ -3,16 +3,16 @@
 This file marks the model structure currently used as the main VID experiment
 configuration in this repository.
 
-Last updated: 2026-05-16
+Last updated: 2026-05-17
 
 ## Model Name
 
-**Mamba-YOLO-T-VID with TRFA and Track-ID Tube Supervision**
+**Mamba-YOLO-T-VID with TRFA, Track-ID Tube Supervision, and TTRM**
 
 Short name used in notes:
 
 ```text
-Mamba-YOLO-T-VID-TrackTube-v7
+Mamba-YOLO-T-VID-TTRM-v8
 ```
 
 ## Fixed Backbone and Neck
@@ -71,6 +71,27 @@ This is the current primary video-metric optimization path. It directly targets
 missed detections, class flicker, and track fragmentation instead of relying on
 feature fusion alone.
 
+## Current Video-Level Refinement
+
+Periodic extra evaluation now uses a model-agnostic Temporal Tubelet Refinement
+Module (TTRM) after raw detection export:
+
+```text
+raw per-frame detections
+  -> greedy local association into tubelets
+  -> tubelet class voting
+  -> tubelet score propagation
+  -> short-gap interpolation
+  -> light box smoothing
+  -> refined detections for flicker
+  -> refined track txt files for MOT/ID
+```
+
+This module is designed specifically for video metrics. It reduces class flicker
+by assigning a stable majority category inside each tubelet, reduces
+fragmentation by filling short missing gaps, and improves identity continuity by
+using stable tubelet ids for MOT/ID evaluation.
+
 ## Current Main Structural Hyperparameters
 
 ```bash
@@ -84,6 +105,11 @@ feature fusion alone.
 --trfa_alpha_target 1.0
 --track_recall_loss 0.5
 --track_consistency_loss 0.2
+--extra_eval_ttrm
+--ttrm_gap_fill 2
+--ttrm_vote_gain 0.75
+--ttrm_recall_gain 0.65
+--ttrm_input_topk 180
 ```
 
 ## What These Options Mean

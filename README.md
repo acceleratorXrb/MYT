@@ -13,7 +13,7 @@ object detection. The current research constraint is:
 Current variant:
 
 ```text
-Mamba-YOLO-T-VID-TrackTube-v7
+Mamba-YOLO-T-VID-TTRM-v8
 ```
 
 High-level flow:
@@ -29,15 +29,22 @@ High-level flow:
   -> track-id tube supervision during training
       - tube class recall loss
       - same-track confidence continuity loss
-      -> offline VID detections / flicker / MOT-ID metrics
+  -> Temporal Tubelet Refinement Module during video evaluation
+      - tubelet association
+      - class voting
+      - score propagation
+      - short-gap recovery
+      - box smoothing
+  -> offline VID detections / flicker / MOT-ID metrics
 ```
 
-The official backbone and neck are not structurally modified. The current v6
-experiment removes the older score-smoothing/proposal branches and uses one
+The official backbone and neck are not structurally modified. The current model
+removes the older score-smoothing/proposal branches and uses one
 simple temporal residual feature adapter before the Detect branches, so both
 box regression and classification can receive local video context. The current
 training objective also uses VisDrone `track_id` annotations to supervise
-same-object temporal continuity inside each 16-frame window.
+same-object temporal continuity inside each 16-frame window. Periodic video
+evaluation then applies TTRM to make the exported detections temporally stable.
 
 ## Quick Start
 
@@ -49,16 +56,16 @@ source .venv/bin/activate
 git pull
 git submodule update --init --recursive
 
-python tools/model_variant.py train-command track_tube_v7_2026-05-17 \
-  --name track_tube_v7
+python tools/model_variant.py train-command ttrm_v8_2026-05-17 \
+  --name ttrm_v8
 ```
 
 To inspect saved model variants:
 
 ```bash
 python tools/model_variant.py list
-python tools/model_variant.py show track_tube_v7_2026-05-17
-python tools/model_variant.py train-command track_tube_v7_2026-05-17
+python tools/model_variant.py show ttrm_v8_2026-05-17
+python tools/model_variant.py train-command ttrm_v8_2026-05-17
 ```
 
 ## Important Files
@@ -91,7 +98,8 @@ python tools/model_variant.py train-command track_tube_v7_2026-05-17
 | Path | Purpose |
 | --- | --- |
 | `model_variants/README.md` | Explains the model-variant record directory. |
-| `model_variants/track_tube_v7_2026-05-17.yaml` | Current main model record: TRFA plus track-id tube supervision, key hyperparameters, notes, and training command. |
+| `model_variants/ttrm_v8_2026-05-17.yaml` | Current main model record: TRFA, track-id tube supervision, and TTRM video refinement. |
+| `model_variants/track_tube_v7_2026-05-17.yaml` | Previous main model record: TRFA plus track-id tube supervision, key hyperparameters, notes, and training command. |
 | `model_variants/temporal_residual_v6_2026-05-16.yaml` | Previous temporal residual feature adapter model record kept for rollback and ablation. |
 | `model_variants/score_smooth_v5_2026-05-14.yaml` | Previous score-smoothing model record kept for rollback and ablation. |
 | `model_variants/temporal_adapter_p4p5_yolov_v4_2026-05-14.yaml` | Previous P4/P5 temporal adapter model record for rollback and ablation. |
@@ -118,7 +126,8 @@ When a new architecture stage becomes important, add a new YAML file under
 | `tools/export_visdrone_vid_results.py` | Single-frame detection export for baseline Mamba-YOLO or YOLOv8. |
 | `tools/export_visdrone_vid_clip_results.py` | Offline clip/window detection export for the VID model. |
 | `tools/export_visdrone_vid_tracks.py` | Single-frame detection plus ByteTrack export. |
-| `tools/export_visdrone_vid_clip_tracks.py` | Offline clip/window detection plus ByteTrack export. Current MOT/ID evaluation should use this path. |
+| `tools/export_visdrone_vid_clip_tracks.py` | Offline clip/window detection plus ByteTrack export. Kept for non-TTRM evaluation. |
+| `tools/refine_visdrone_vid_tubelets.py` | Temporal Tubelet Refinement Module (TTRM). It refines raw detections into temporally stable detections and tracks for flicker/MOT evaluation. |
 | `tools/eval_visdrone_vid_cls_flicker.py` | Classification flicker metrics: `macro_flicker` and `micro_flicker`. |
 | `tools/eval_visdrone_vid_mot.py` | Current MOT/ID metrics: IDF1, IDP, IDR, ID switches, and fragmentation. |
 | `tools/validate_visdrone_video_metrics.py` | Synthetic self-check for the local flicker and MOT/ID metric implementations. |
@@ -149,7 +158,7 @@ git submodule update --init --recursive
 
 ## Current Main Hyperparameters
 
-These options define `Mamba-YOLO-T-VID-TrackTube-v7`:
+These options define `Mamba-YOLO-T-VID-TTRM-v8`:
 
 ```bash
 --vid_clip_mode window
@@ -161,6 +170,11 @@ These options define `Mamba-YOLO-T-VID-TrackTube-v7`:
 --trfa_alpha_target 1.0
 --track_recall_loss 0.5
 --track_consistency_loss 0.2
+--extra_eval_ttrm
+--ttrm_gap_fill 2
+--ttrm_vote_gain 0.75
+--ttrm_recall_gain 0.65
+--ttrm_input_topk 180
 ```
 
 If these options or the head structure change substantially, treat the result as
@@ -198,14 +212,16 @@ Recommended comparisons:
 - Official Mamba-YOLO-T baseline: single-frame Mamba-YOLO.
 - Official YOLOv8 baseline: single-frame YOLOv8.
 - Current new model: Mamba-YOLO-T backbone/neck plus temporal residual feature
-  adaptation inside `Detect_VID` and track-id tube supervision in the loss.
+  adaptation inside `Detect_VID`, track-id tube supervision in the loss, and
+  TTRM video-level refinement for exported detections/tracks.
 - Ablations: compare `trfa_levels all/p3p4/p4p5`, vary `trfa_alpha_target`,
   compare against `temporal_fusion none`.
 
 The previous score-smoothing/proposal branches improved precision and identity
-stability inconsistently. The current v6 model is intentionally simpler: one
-local temporal residual adapter is added before the existing Detect branches so
-the model can learn temporal correction directly at the feature level.
+stability inconsistently. The current model keeps the training path simple and
+adds a model-agnostic tubelet refinement stage during video evaluation, which is
+aimed directly at classification flicker, short detection gaps, ID switches, and
+track fragmentation.
 
 ## Acknowledgement
 
