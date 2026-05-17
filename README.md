@@ -185,6 +185,12 @@ When `mbyolo_train.py` is launched with `--extra_eval_period > 0`, this
 self-check runs once before periodic video evaluation is registered. Use
 `--skip_metric_self_check` only when deliberately debugging the metric scripts.
 
+Periodic extra evaluation also writes detection export speed to
+`extra_eval/epochXXX/speed.json` and copies it into `summary.json` under
+`speed`. The reported `detection_export_fps` is measured after model loading and
+includes preprocessing, model inference, NMS, and result txt export; it does not
+include flicker/MOT metric computation.
+
 ## Experiment Notes
 
 Recommended comparisons:

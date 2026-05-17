@@ -2,7 +2,9 @@
 """Export Mamba-YOLO predictions to the official VisDrone-VID result txt format."""
 
 import argparse
+import json
 import re
+import time
 from pathlib import Path
 
 from temporal_state import reset_video_state
@@ -26,6 +28,7 @@ def parse_args():
     parser.add_argument("--device", default="0")
     parser.add_argument("--conf", type=float, default=0.001, help="Low confidence threshold for official AP evaluation.")
     parser.add_argument("--iou", type=float, default=0.7)
+    parser.add_argument("--speed_json", type=Path, default=None, help="Optional JSON path for export FPS statistics.")
     return parser.parse_args()
 
 
@@ -62,6 +65,7 @@ def xyxy_to_xywh(xyxy, width, height):
 def main():
     args = parse_args()
     from ultralytics import YOLO
+    import torch
 
     args.out.mkdir(parents=True, exist_ok=True)
     seq_root = resolve_sequence_root(args.source)
@@ -71,9 +75,15 @@ def main():
     if not seq_dirs:
         raise FileNotFoundError(f"No sequence directories found in {seq_root}")
 
+    total_frames = 0
+    total_detections = 0
+    if torch.cuda.is_available() and str(args.device).lower() != "cpu":
+        torch.cuda.synchronize()
+    t0 = time.perf_counter()
     for seq_dir in seq_dirs:
         reset_video_state(model)
         frames = image_files(seq_dir)
+        total_frames += len(frames)
         lines = []
         for fallback, frame_path in enumerate(frames, start=1):
             results = model.predict(
@@ -111,7 +121,29 @@ def main():
 
         output = args.out / f"{seq_dir.name}.txt"
         output.write_text("".join(lines), encoding="utf-8")
+        total_detections += len(lines)
         print(f"{seq_dir.name}: {len(frames)} frames, {len(lines)} detections -> {output}")
+
+    if torch.cuda.is_available() and str(args.device).lower() != "cpu":
+        torch.cuda.synchronize()
+    elapsed = max(time.perf_counter() - t0, 1e-9)
+    speed = {
+        "metric": "detection_export_fps",
+        "mode": "single_frame_predict",
+        "frames": total_frames,
+        "detections": total_detections,
+        "elapsed_seconds": elapsed,
+        "fps": total_frames / elapsed,
+        "note": "Measured after model load; includes preprocessing, model inference, NMS, and txt export.",
+    }
+    print(
+        f"[speed] detection_export_fps={speed['fps']:.3f} "
+        f"frames={total_frames} elapsed={elapsed:.3f}s",
+        flush=True,
+    )
+    if args.speed_json is not None:
+        args.speed_json.parent.mkdir(parents=True, exist_ok=True)
+        args.speed_json.write_text(json.dumps(speed, indent=2) + "\n", encoding="utf-8")
 
 
 if __name__ == "__main__":

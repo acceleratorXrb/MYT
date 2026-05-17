@@ -107,6 +107,7 @@ def build_extra_eval_callback(opt):
         tracks_dir = out_root / "tracks"
         flicker_json = out_root / "flicker.json"
         mot_json = out_root / "mot.json"
+        speed_json = out_root / "speed.json"
         summary_json = out_root / "summary.json"
         out_root.mkdir(parents=True, exist_ok=True)
 
@@ -138,6 +139,8 @@ def build_extra_eval_callback(opt):
                 opt.extra_eval_conf,
                 "--iou",
                 opt.extra_eval_iou,
+                "--speed_json",
+                speed_json,
             ]
             if use_clip_export:
                 export_cmd.extend(
@@ -237,6 +240,11 @@ def build_extra_eval_callback(opt):
                 "out_root": str(out_root),
                 "steps": steps,
             }
+            if speed_json.exists():
+                try:
+                    payload["speed"] = json.loads(speed_json.read_text(encoding="utf-8"))
+                except json.JSONDecodeError as exc:
+                    payload["speed_error"] = f"failed to parse {speed_json}: {exc}"
             summary_json.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
             print(f"[extra-eval] epoch {epoch} summary saved to {summary_json}", flush=True)
 

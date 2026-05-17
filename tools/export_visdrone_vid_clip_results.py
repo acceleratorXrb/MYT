@@ -2,7 +2,9 @@
 """Export VisDrone-VID detections with explicit key+ref clip inference."""
 
 import argparse
+import json
 import re
+import time
 from pathlib import Path
 
 import cv2
@@ -32,6 +34,7 @@ def parse_args():
     parser.add_argument("--window_size", type=int, default=16, help="Frames per window when --all_keys is enabled.")
     parser.add_argument("--temporal_fusion", default=None, choices=["trfa", "none"])
     parser.add_argument("--trfa_levels", default=None, choices=["all", "p3", "p4", "p5", "p3p4", "p4p5", "none"])
+    parser.add_argument("--speed_json", type=Path, default=None, help="Optional JSON path for export FPS statistics.")
     return parser.parse_args()
 
 
@@ -187,9 +190,15 @@ def main():
     if not seq_dirs:
         raise FileNotFoundError(f"No sequence directories found in {seq_root}")
 
+    total_frames = 0
+    total_detections = 0
+    if torch.cuda.is_available() and str(args.device).lower() != "cpu":
+        torch.cuda.synchronize()
+    t0 = time.perf_counter()
     for seq_dir in seq_dirs:
         reset_video_state(yolo)
         frames = image_files(seq_dir)
+        total_frames += len(frames)
         if args.all_keys:
             lines = export_window_detections(yolo, frames, args, stride, device)
             mode_label = "window"
@@ -220,7 +229,31 @@ def main():
 
         output = args.out / f"{seq_dir.name}.txt"
         output.write_text("".join(lines), encoding="utf-8")
+        total_detections += len(lines)
         print(f"{seq_dir.name}: {len(frames)} frames, {len(lines)} {mode_label} detections -> {output}")
+
+    if torch.cuda.is_available() and str(args.device).lower() != "cpu":
+        torch.cuda.synchronize()
+    elapsed = max(time.perf_counter() - t0, 1e-9)
+    speed = {
+        "metric": "detection_export_fps",
+        "mode": "window" if args.all_keys else "clip",
+        "frames": total_frames,
+        "detections": total_detections,
+        "elapsed_seconds": elapsed,
+        "fps": total_frames / elapsed,
+        "window_size": int(args.window_size) if args.all_keys else None,
+        "num_ref_frames": int(args.num_ref_frames),
+        "note": "Measured after model load; includes preprocessing, model inference, NMS, and txt export.",
+    }
+    print(
+        f"[speed] detection_export_fps={speed['fps']:.3f} "
+        f"frames={total_frames} elapsed={elapsed:.3f}s mode={speed['mode']}",
+        flush=True,
+    )
+    if args.speed_json is not None:
+        args.speed_json.parent.mkdir(parents=True, exist_ok=True)
+        args.speed_json.write_text(json.dumps(speed, indent=2) + "\n", encoding="utf-8")
 
 
 if __name__ == "__main__":
