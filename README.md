@@ -171,17 +171,10 @@ These options define `Mamba-YOLO-T-VID-TTRM-v8`:
 --track_recall_loss 0.5
 --track_consistency_loss 0.2
 --extra_eval_ttrm
---extra_eval_conf 0.01
---ttrm_seed_score 0.12
---ttrm_keep_score 0.08
---ttrm_track_keep_score 0.12
---ttrm_track_min_len 4
---ttrm_track_min_score 0.20
---ttrm_gap_fill 1
---ttrm_vote_gain 0.35
---ttrm_recall_gain 0.25
---ttrm_input_topk 60
---ttrm_max_per_frame 80
+--ttrm_gap_fill 2
+--ttrm_vote_gain 0.75
+--ttrm_recall_gain 0.65
+--ttrm_input_topk 180
 --debug_ttrm
 ```
 

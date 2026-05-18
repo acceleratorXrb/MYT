@@ -60,23 +60,20 @@ main_hyperparameters:
   track_consistency_loss: 0.2
   ref_aux_loss: 0.0
   extra_eval_ttrm: true
-  ttrm_seed_score: 0.12
-  ttrm_attach_score: 0.01
-  ttrm_keep_score: 0.08
-  ttrm_track_keep_score: 0.12
-  ttrm_track_min_len: 4
-  ttrm_track_min_score: 0.20
-  ttrm_track_min_avg_score: 0.10
-  ttrm_assoc_iou: 0.22
+  ttrm_seed_score: 0.05
+  ttrm_attach_score: 0.001
+  ttrm_keep_score: 0.03
+  ttrm_track_min_len: 2
+  ttrm_track_min_score: 0.08
+  ttrm_assoc_iou: 0.18
   ttrm_assoc_center_factor: 2.5
-  ttrm_max_gap: 2
-  ttrm_gap_fill: 1
+  ttrm_max_gap: 3
+  ttrm_gap_fill: 2
   ttrm_smooth: 0.55
-  ttrm_vote_gain: 0.35
-  ttrm_recall_gain: 0.25
-  ttrm_input_topk: 60
-  ttrm_max_per_frame: 80
-  ttrm_output_nms_iou: 0.65
+  ttrm_vote_gain: 0.75
+  ttrm_recall_gain: 0.65
+  ttrm_input_topk: 180
+  ttrm_max_per_frame: 300
   debug_ttrm: true
 
 training_command:
@@ -144,46 +141,38 @@ training_command:
   - "1.0"
   - --extra_eval_period
   - "1"
-  - --extra_eval_conf
-  - "0.01"
   - --extra_eval_clip_inference
   - --extra_eval_window_inference
   - --extra_eval_ttrm
   - --debug_ttrm
   - --ttrm_seed_score
-  - "0.12"
+  - "0.05"
   - --ttrm_attach_score
-  - "0.01"
+  - "0.001"
   - --ttrm_keep_score
-  - "0.08"
-  - --ttrm_track_keep_score
-  - "0.12"
+  - "0.03"
   - --ttrm_track_min_len
-  - "4"
+  - "2"
   - --ttrm_track_min_score
-  - "0.20"
-  - --ttrm_track_min_avg_score
-  - "0.10"
+  - "0.08"
   - --ttrm_assoc_iou
-  - "0.22"
+  - "0.18"
   - --ttrm_assoc_center_factor
   - "2.5"
   - --ttrm_max_gap
-  - "2"
+  - "3"
   - --ttrm_gap_fill
-  - "1"
+  - "2"
   - --ttrm_smooth
   - "0.55"
   - --ttrm_vote_gain
-  - "0.35"
+  - "0.75"
   - --ttrm_recall_gain
-  - "0.25"
-  - --ttrm_input_topk
-  - "60"
-  - --ttrm_max_per_frame
-  - "80"
-  - --ttrm_output_nms_iou
   - "0.65"
+  - --ttrm_input_topk
+  - "180"
+  - --ttrm_max_per_frame
+  - "300"
   - --extra_eval_official_root
   - datasets/VisDrone-VID/raw/VisDrone2019-VID-val
   - --project

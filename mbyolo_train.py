@@ -180,14 +180,10 @@ def build_extra_eval_callback(opt):
                     opt.ttrm_attach_score,
                     "--keep_score",
                     opt.ttrm_keep_score,
-                    "--track_keep_score",
-                    opt.ttrm_track_keep_score,
                     "--track_min_len",
                     opt.ttrm_track_min_len,
                     "--track_min_score",
                     opt.ttrm_track_min_score,
-                    "--track_min_avg_score",
-                    opt.ttrm_track_min_avg_score,
                     "--assoc_iou",
                     opt.ttrm_assoc_iou,
                     "--assoc_center_factor",
@@ -206,8 +202,6 @@ def build_extra_eval_callback(opt):
                     opt.ttrm_input_topk,
                     "--max_per_frame",
                     opt.ttrm_max_per_frame,
-                    "--output_nms_iou",
-                    opt.ttrm_output_nms_iou,
                 ]
                 if opt.debug_ttrm:
                     ttrm_cmd.append("--debug")
@@ -495,23 +489,20 @@ def parse_opt():
     parser.add_argument('--extra_eval_clip_inference', action='store_true', help='export detections with explicit key+ref clip inference instead of streaming')
     parser.add_argument('--extra_eval_window_inference', action='store_true', help='export detections/tracks with non-overlapping VID windows; every frame is inferred once')
     parser.add_argument('--extra_eval_ttrm', action='store_true', help='refine extra-eval detections with tubelet-level temporal consistency before flicker/MOT')
-    parser.add_argument('--ttrm_seed_score', type=float, default=0.12, help='TTRM minimum score for starting a new tubelet')
-    parser.add_argument('--ttrm_attach_score', type=float, default=0.01, help='TTRM minimum score for attaching to an existing tubelet')
-    parser.add_argument('--ttrm_keep_score', type=float, default=0.08, help='TTRM minimum refined score to output as detections')
-    parser.add_argument('--ttrm_track_keep_score', type=float, default=0.12, help='TTRM minimum refined score to output as tracks')
-    parser.add_argument('--ttrm_track_min_len', type=int, default=4, help='TTRM suppresses tubelets shorter than this unless very confident')
-    parser.add_argument('--ttrm_track_min_score', type=float, default=0.20, help='TTRM minimum max score for output tubelets')
-    parser.add_argument('--ttrm_track_min_avg_score', type=float, default=0.10, help='TTRM minimum average score for output tubelets')
-    parser.add_argument('--ttrm_assoc_iou', type=float, default=0.22, help='TTRM frame-to-frame association IoU gate')
+    parser.add_argument('--ttrm_seed_score', type=float, default=0.05, help='TTRM minimum score for starting a new tubelet')
+    parser.add_argument('--ttrm_attach_score', type=float, default=0.001, help='TTRM minimum score for attaching to an existing tubelet')
+    parser.add_argument('--ttrm_keep_score', type=float, default=0.03, help='TTRM minimum refined score to output')
+    parser.add_argument('--ttrm_track_min_len', type=int, default=2, help='TTRM suppresses tubelets shorter than this unless very confident')
+    parser.add_argument('--ttrm_track_min_score', type=float, default=0.08, help='TTRM minimum max score for output tubelets')
+    parser.add_argument('--ttrm_assoc_iou', type=float, default=0.18, help='TTRM frame-to-frame association IoU gate')
     parser.add_argument('--ttrm_assoc_center_factor', type=float, default=2.5, help='TTRM center-distance association gate in object-scale units')
-    parser.add_argument('--ttrm_max_gap', type=int, default=2, help='TTRM maximum frame gap for active tubelets')
-    parser.add_argument('--ttrm_gap_fill', type=int, default=1, help='TTRM interpolates missing detections for gaps up to this length')
+    parser.add_argument('--ttrm_max_gap', type=int, default=3, help='TTRM maximum frame gap for active tubelets')
+    parser.add_argument('--ttrm_gap_fill', type=int, default=2, help='TTRM interpolates missing detections for gaps up to this length')
     parser.add_argument('--ttrm_smooth', type=float, default=0.55, help='TTRM box smoothing weight toward the temporal moving average')
-    parser.add_argument('--ttrm_vote_gain', type=float, default=0.35, help='TTRM class-vote score gain for tubelet majority category')
-    parser.add_argument('--ttrm_recall_gain', type=float, default=0.25, help='TTRM score propagation gain from tubelet max score')
-    parser.add_argument('--ttrm_input_topk', type=int, default=60, help='TTRM maximum raw detections kept per frame before association')
-    parser.add_argument('--ttrm_max_per_frame', type=int, default=80, help='TTRM maximum refined outputs per frame')
-    parser.add_argument('--ttrm_output_nms_iou', type=float, default=0.65, help='TTRM class-wise NMS IoU for refined per-frame outputs')
+    parser.add_argument('--ttrm_vote_gain', type=float, default=0.75, help='TTRM class-vote score gain for tubelet majority category')
+    parser.add_argument('--ttrm_recall_gain', type=float, default=0.65, help='TTRM score propagation gain from tubelet max score')
+    parser.add_argument('--ttrm_input_topk', type=int, default=180, help='TTRM maximum raw detections kept per frame before association')
+    parser.add_argument('--ttrm_max_per_frame', type=int, default=300, help='TTRM maximum refined outputs per frame')
     parser.add_argument('--skip_metric_self_check', action='store_true', help='skip synthetic flicker/MOT metric self-check before periodic extra eval')
     parser.add_argument('--extra_eval_strict', action='store_true', help='fail training if an extra-eval step fails')
     opt = parser.parse_args()
