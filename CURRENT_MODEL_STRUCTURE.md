@@ -7,12 +7,12 @@ Last updated: 2026-05-18
 
 ## Model Name
 
-**Mamba-YOLO-T-VID with Classification-Branch TRFA and Track-ID Tube Supervision**
+**Mamba-YOLO-T-VID with Classification-Branch TRFA, Track-ID Tube Supervision, and Video Export Stabilization**
 
 Short name used in notes:
 
 ```text
-Mamba-YOLO-T-VID-ClsStable-v8
+Mamba-YOLO-T-VID-VideoStable-v9
 ```
 
 ## Fixed Backbone and Neck
@@ -69,9 +69,31 @@ GT labels with track_id
   -> same-track full class-distribution consistency loss
 ```
 
-This is the current primary video-metric optimization path. It directly targets
-missed detections, class flicker, and track fragmentation instead of relying on
-feature fusion alone.
+This is the current primary model-side video-metric optimization path. It
+directly targets missed detections, class flicker, and track fragmentation
+instead of relying on feature fusion alone.
+
+### Extra-Eval Temporal Stabilizer
+
+The current video-metric export path also applies a GT-free temporal stabilizer
+before flicker and MOT/ID are computed:
+
+```text
+clip/window detections
+  -> high-IoU short-tracklet class smoothing
+  -> flicker evaluation
+
+clip/window detections
+  -> ByteTrack
+  -> same-track class smoothing
+  -> strict short-fragment ID relinking
+  -> one-frame gap interpolation when endpoints strongly overlap
+  -> MOT/ID evaluation
+```
+
+This is intentionally conservative: it does not use annotations, does not create
+large numbers of new boxes, and only acts on highly overlapping neighboring
+predictions. Use `--extra_eval_no_temporal_stabilize` for ablations.
 
 ## Current Main Structural Hyperparameters
 

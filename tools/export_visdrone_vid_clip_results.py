@@ -12,6 +12,7 @@ import numpy as np
 import torch
 
 from temporal_state import reset_video_state
+from visdrone_temporal_stabilize import VidRecord, format_records, stabilize_detection_classes
 
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp"}
@@ -36,6 +37,7 @@ def parse_args():
     parser.add_argument("--trfa_levels", default=None, choices=["all", "p3", "p4", "p5", "p3p4", "p4p5", "none"])
     parser.add_argument("--trfa_branch", default=None, choices=["cls", "box", "both", "none"])
     parser.add_argument("--speed_json", type=Path, default=None, help="Optional JSON path for export FPS statistics.")
+    parser.add_argument("--no_temporal_stabilize", action="store_true", help="Disable GT-free temporal class smoothing.")
     return parser.parse_args()
 
 
@@ -150,7 +152,7 @@ def load_clip(frame_paths, imgsz, stride, return_all=False):
 def export_window_detections(yolo, frames, args, stride, device):
     from ultralytics.utils import ops
 
-    lines = []
+    records = []
     window_size = max(1, int(args.window_size or 1))
     for start in range(0, len(frames), window_size):
         window_frames = frames[start : start + window_size]
@@ -169,11 +171,22 @@ def export_window_detections(yolo, frames, args, stride, device):
             index = frame_index(frame_path, start + local_pos + 1)
             for row in det.detach().cpu().numpy():
                 left, top, box_width, box_height = xyxy_to_xywh(row[:4], width, height)
-                lines.append(
-                    f"{index},-1,{left:.2f},{top:.2f},{box_width:.2f},{box_height:.2f},"
-                    f"{float(row[4]):.6f},{int(row[5]) + 1},-1,-1\n"
+                records.append(
+                    VidRecord(
+                        frame=index,
+                        track_id=-1,
+                        left=left,
+                        top=top,
+                        width=box_width,
+                        height=box_height,
+                        score=float(row[4]),
+                        category=int(row[5]) + 1,
+                    )
                 )
-    return lines
+    if args.no_temporal_stabilize:
+        return format_records(records), {"det_class_changes": 0, "det_tracklets": 0, "det_tracklets_smoothed": 0}
+    records, stats = stabilize_detection_classes(records)
+    return format_records(records), stats
 
 
 def main():
@@ -203,10 +216,10 @@ def main():
         frames = image_files(seq_dir)
         total_frames += len(frames)
         if args.all_keys:
-            lines = export_window_detections(yolo, frames, args, stride, device)
+            lines, stab_stats = export_window_detections(yolo, frames, args, stride, device)
             mode_label = "window"
         else:
-            lines = []
+            records = []
             for key_pos, frame_path in enumerate(frames):
                 ref_pos = sample_ref_positions(
                     len(frames), key_pos, args.num_ref_frames, max(1, args.clip_stride), args.ref_sample
@@ -224,16 +237,33 @@ def main():
                 index = frame_index(frame_path, key_pos + 1)
                 for row in det.detach().cpu().numpy():
                     left, top, box_width, box_height = xyxy_to_xywh(row[:4], width, height)
-                    lines.append(
-                        f"{index},-1,{left:.2f},{top:.2f},{box_width:.2f},{box_height:.2f},"
-                        f"{float(row[4]):.6f},{int(row[5]) + 1},-1,-1\n"
+                    records.append(
+                        VidRecord(
+                            frame=index,
+                            track_id=-1,
+                            left=left,
+                            top=top,
+                            width=box_width,
+                            height=box_height,
+                            score=float(row[4]),
+                            category=int(row[5]) + 1,
+                        )
                     )
+            if args.no_temporal_stabilize:
+                stab_stats = {"det_class_changes": 0, "det_tracklets": 0, "det_tracklets_smoothed": 0}
+            else:
+                records, stab_stats = stabilize_detection_classes(records)
+            lines = format_records(records)
             mode_label = "clip"
 
         output = args.out / f"{seq_dir.name}.txt"
         output.write_text("".join(lines), encoding="utf-8")
         total_detections += len(lines)
-        print(f"{seq_dir.name}: {len(frames)} frames, {len(lines)} {mode_label} detections -> {output}")
+        print(
+            f"{seq_dir.name}: {len(frames)} frames, {len(lines)} {mode_label} detections -> {output} "
+            f"[temporal-stabilize det_changes={stab_stats['det_class_changes']} "
+            f"tracklets={stab_stats['det_tracklets']} smoothed={stab_stats['det_tracklets_smoothed']}]"
+        )
 
     if torch.cuda.is_available() and str(args.device).lower() != "cpu":
         torch.cuda.synchronize()

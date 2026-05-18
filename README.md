@@ -13,7 +13,7 @@ object detection. The current research constraint is:
 Current variant:
 
 ```text
-Mamba-YOLO-T-VID-ClsStable-v8
+Mamba-YOLO-T-VID-VideoStable-v9
 ```
 
 High-level flow:
@@ -30,15 +30,19 @@ High-level flow:
       - tube class recall loss
       - same-track confidence continuity loss
       - same-track class distribution consistency loss
-      -> offline VID detections / flicker / MOT-ID metrics
+  -> GT-free temporal export stabilization
+      - detection class smoothing for flicker
+      - track class smoothing, strict fragment relinking, one-frame gap filling
+  -> offline VID detections / flicker / MOT-ID metrics
 ```
 
-The official backbone and neck are not structurally modified. The current v6
-experiment removes the older score-smoothing/proposal branches and uses one
-simple temporal residual feature adapter before the Detect branches, so both
-the classification branch can receive local video context while bbox regression
-keeps current-frame features. The current training objective also uses VisDrone `track_id` annotations to supervise
-same-object temporal continuity inside each 16-frame window.
+The official backbone and neck are not structurally modified. The current main
+experiment uses one simple temporal residual feature adapter before the Detect
+classification branch, while bbox regression keeps current-frame features. The
+training objective also uses VisDrone `track_id` annotations to supervise
+same-object temporal continuity inside each 16-frame window. Periodic extra
+evaluation adds a conservative GT-free stabilizer to directly target `ID
+Switches`, `Frag`, and `flicker`.
 
 ## Quick Start
 
@@ -50,16 +54,16 @@ source .venv/bin/activate
 git pull
 git submodule update --init --recursive
 
-python tools/model_variant.py train-command cls_stable_v8_2026-05-18 \
-  --name cls_stable_v8
+python tools/model_variant.py train-command video_stable_v9_2026-05-18 \
+  --name video_stable_v9
 ```
 
 To inspect saved model variants:
 
 ```bash
 python tools/model_variant.py list
-python tools/model_variant.py show cls_stable_v8_2026-05-18
-python tools/model_variant.py train-command cls_stable_v8_2026-05-18
+python tools/model_variant.py show video_stable_v9_2026-05-18
+python tools/model_variant.py train-command video_stable_v9_2026-05-18
 ```
 
 ## Important Files
@@ -92,7 +96,8 @@ python tools/model_variant.py train-command cls_stable_v8_2026-05-18
 | Path | Purpose |
 | --- | --- |
 | `model_variants/README.md` | Explains the model-variant record directory. |
-| `model_variants/cls_stable_v8_2026-05-18.yaml` | Current main model record: classification-branch TRFA plus track-id tube supervision, key hyperparameters, notes, and training command. |
+| `model_variants/video_stable_v9_2026-05-18.yaml` | Current main experiment record: classification-branch TRFA, track-id tube supervision, GT-free video export stabilization, key hyperparameters, notes, and training command. |
+| `model_variants/cls_stable_v8_2026-05-18.yaml` | Previous main model record: classification-branch TRFA plus track-id tube supervision. |
 | `model_variants/track_tube_v7_2026-05-17.yaml` | Previous main model record: TRFA plus track-id tube supervision. |
 | `model_variants/temporal_residual_v6_2026-05-16.yaml` | Previous temporal residual feature adapter model record kept for rollback and ablation. |
 | `model_variants/score_smooth_v5_2026-05-14.yaml` | Previous score-smoothing model record kept for rollback and ablation. |
@@ -121,6 +126,7 @@ When a new architecture stage becomes important, add a new YAML file under
 | `tools/export_visdrone_vid_clip_results.py` | Offline clip/window detection export for the VID model. |
 | `tools/export_visdrone_vid_tracks.py` | Single-frame detection plus ByteTrack export. |
 | `tools/export_visdrone_vid_clip_tracks.py` | Offline clip/window detection plus ByteTrack export. Current MOT/ID evaluation should use this path. |
+| `tools/visdrone_temporal_stabilize.py` | GT-free temporal smoothing/linking used by clip detection and track exports to reduce class flicker, ID switches, and short fragments. |
 | `tools/eval_visdrone_vid_cls_flicker.py` | Classification flicker metrics: `macro_flicker` and `micro_flicker`. |
 | `tools/eval_visdrone_vid_mot.py` | Current MOT/ID metrics: IDF1, IDP, IDR, ID switches, and fragmentation. |
 | `tools/validate_visdrone_video_metrics.py` | Synthetic self-check for the local flicker and MOT/ID metric implementations. |
@@ -151,7 +157,7 @@ git submodule update --init --recursive
 
 ## Current Main Hyperparameters
 
-These options define `Mamba-YOLO-T-VID-ClsStable-v8`:
+These options define `Mamba-YOLO-T-VID-VideoStable-v9`:
 
 ```bash
 --vid_clip_mode window
@@ -166,6 +172,12 @@ These options define `Mamba-YOLO-T-VID-ClsStable-v8`:
 --track_consistency_loss 0.2
 --track_cls_consistency_loss 0.1
 ```
+
+Periodic clip/window extra evaluation uses GT-free temporal stabilization by
+default. It smooths high-overlap short detection tracklets for flicker, then
+smooths ByteTrack classes, relinks strict short fragments, and fills one-frame
+track gaps for MOT/ID. Add `--extra_eval_no_temporal_stabilize` only for the
+ablation without this video-metric stabilizer.
 
 If these options or the head structure change substantially, treat the result as
 a new experiment variant and create a new `model_variants/*.yaml` record.
@@ -182,8 +194,9 @@ python tools/validate_visdrone_video_metrics.py
 
 This script builds a tiny VisDrone-style GT/prediction fixture with hand-checked
 expected values and verifies `macro_flicker`, `micro_flicker`, `IDF1`, `IDP`,
-`IDR`, `ID Switches`, and `Frag`. If this script fails, do not compare model
-video metrics until the metric implementation is fixed.
+`IDR`, `ID Switches`, `Frag`, and the GT-free temporal stabilizer. If this
+script fails, do not compare model video metrics until the metric implementation
+or stabilizer implementation is fixed.
 
 When `mbyolo_train.py` is launched with `--extra_eval_period > 0`, this
 self-check runs once before periodic video evaluation is registered. Use
@@ -208,9 +221,10 @@ Recommended comparisons:
   compare against `temporal_fusion none`.
 
 The previous score-smoothing/proposal branches improved precision and identity
-stability inconsistently. The current v6 model is intentionally simpler: one
-local temporal residual adapter is added before the existing Detect branches so
-the model can learn temporal correction directly at the feature level.
+stability inconsistently. The current v9 path is intentionally simpler on the
+model side: one local temporal residual adapter is added before the existing
+Detect classification branch, and the extra-eval export applies conservative
+GT-free temporal stabilization for the video metrics.
 
 ## Acknowledgement
 

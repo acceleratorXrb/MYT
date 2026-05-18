@@ -158,6 +158,8 @@ def build_extra_eval_callback(opt):
                 export_cmd.extend(
                     ["--temporal_fusion", opt.temporal_fusion, "--trfa_levels", opt.trfa_levels, "--trfa_branch", opt.trfa_branch]
                 )
+                if opt.extra_eval_no_temporal_stabilize:
+                    export_cmd.append("--no_temporal_stabilize")
             else:
                 export_cmd.extend(["--batch", opt.extra_eval_batch])
             steps.append(run_extra_eval_step("export_detections", export_cmd, strict))
@@ -216,9 +218,11 @@ def build_extra_eval_callback(opt):
                 )
                 if opt.extra_eval_window_inference:
                     track_cmd.extend(["--all_keys", "--window_size", opt.vid_window_size or opt.num_ref_frames + 1])
-                    track_cmd.extend(
-                        ["--temporal_fusion", opt.temporal_fusion, "--trfa_levels", opt.trfa_levels, "--trfa_branch", opt.trfa_branch]
-                    )
+                track_cmd.extend(
+                    ["--temporal_fusion", opt.temporal_fusion, "--trfa_levels", opt.trfa_levels, "--trfa_branch", opt.trfa_branch]
+                )
+                if opt.extra_eval_no_temporal_stabilize:
+                    track_cmd.append("--no_temporal_stabilize")
             steps.append(run_extra_eval_step("export_tracks", track_cmd, strict))
             steps.append(
                 run_extra_eval_step(
@@ -442,6 +446,7 @@ def parse_opt():
     parser.add_argument('--extra_eval_iou', type=float, default=0.7, help='NMS IoU threshold for extra eval exports')
     parser.add_argument('--extra_eval_clip_inference', action='store_true', help='export detections with explicit key+ref clip inference instead of streaming')
     parser.add_argument('--extra_eval_window_inference', action='store_true', help='export detections/tracks with non-overlapping VID windows; every frame is inferred once')
+    parser.add_argument('--extra_eval_no_temporal_stabilize', action='store_true', help='disable GT-free temporal smoothing/linking in extra-eval exports')
     parser.add_argument('--skip_metric_self_check', action='store_true', help='skip synthetic flicker/MOT metric self-check before periodic extra eval')
     parser.add_argument('--extra_eval_strict', action='store_true', help='fail training if an extra-eval step fails')
     opt = parser.parse_args()

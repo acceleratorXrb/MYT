@@ -22,6 +22,7 @@ from pathlib import Path
 
 from eval_visdrone_vid_cls_flicker import evaluate_flicker
 from eval_visdrone_vid_mot import evaluate_mot
+from visdrone_temporal_stabilize import VidRecord, stabilize_detection_classes, stabilize_track_records
 
 
 SEQ_NAME = "toy_sequence.txt"
@@ -141,6 +142,26 @@ def validate_fixture(root: Path, verbose: bool = False) -> None:
     assert_close("mot.IDF1", mot["IDF1"], 6 / 13)
     assert_close("mot.IDP", mot["IDP"], 3 / 7)
     assert_close("mot.IDR", mot["IDR"], 3 / 6)
+
+    det_records = [
+        VidRecord(1, -1, 0, 0, 10, 10, 0.40, 1),
+        VidRecord(2, -1, 0, 0, 10, 10, 0.35, 2),
+        VidRecord(3, -1, 0, 0, 10, 10, 0.45, 1),
+    ]
+    det_stable, det_stats = stabilize_detection_classes(det_records)
+    assert_equal("stabilizer.det_class_changes", det_stats["det_class_changes"], 1)
+    assert_equal("stabilizer.det_categories", [r.category for r in det_stable], [1, 1, 1])
+
+    track_records = [
+        VidRecord(1, 10, 0, 0, 10, 10, 0.80, 1),
+        VidRecord(2, 10, 0, 0, 10, 10, 0.80, 1),
+        VidRecord(4, 11, 0, 0, 10, 10, 0.80, 1),
+    ]
+    track_stable, track_stats = stabilize_track_records(track_records)
+    assert_equal("stabilizer.track_fragment_links", track_stats["track_fragment_links"], 1)
+    assert_equal("stabilizer.track_gap_fills", track_stats["track_gap_fills"], 1)
+    assert_equal("stabilizer.track_frames", [r.frame for r in track_stable], [1, 2, 4, 3])
+    assert_equal("stabilizer.track_ids", sorted({r.track_id for r in track_stable}), [10])
 
 
 def main() -> None:

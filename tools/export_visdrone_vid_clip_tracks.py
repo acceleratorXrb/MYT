@@ -29,6 +29,7 @@ from export_visdrone_vid_clip_results import (
     set_clip_layout,
 )
 from temporal_state import reset_video_state
+from visdrone_temporal_stabilize import VidRecord, format_records, stabilize_track_records
 
 
 def parse_args():
@@ -50,6 +51,7 @@ def parse_args():
     parser.add_argument("--temporal_fusion", default=None, choices=["trfa", "none"])
     parser.add_argument("--trfa_levels", default=None, choices=["all", "p3", "p4", "p5", "p3p4", "p4p5", "none"])
     parser.add_argument("--trfa_branch", default=None, choices=["cls", "box", "both", "none"])
+    parser.add_argument("--no_temporal_stabilize", action="store_true", help="Disable GT-free track smoothing/linking.")
     return parser.parse_args()
 
 
@@ -104,6 +106,20 @@ def format_track_line(frame_id, track_id, xyxy, score, cls, width, height):
     )
 
 
+def track_record(frame_id, track_id, xyxy, score, cls, width, height):
+    left, top, box_width, box_height = xyxy_to_xywh_left_top(xyxy, width, height)
+    return VidRecord(
+        frame=int(frame_id),
+        track_id=int(track_id),
+        left=left,
+        top=top,
+        width=box_width,
+        height=box_height,
+        score=float(score),
+        category=int(cls) + 1,
+    )
+
+
 def main():
     args = parse_args()
     from ultralytics import YOLO
@@ -125,7 +141,7 @@ def main():
         reset_video_state(yolo)
         tracker = build_tracker(args.tracker)
         frames = image_files(seq_dir)
-        lines = []
+        records = []
         if args.all_keys:
             window_size = max(1, int(args.window_size or 1))
             for start in range(0, len(frames), window_size):
@@ -147,7 +163,7 @@ def main():
                         order = np.argsort(tracks[:, 5])[::-1]
                         for row_index in order:
                             row = tracks[row_index]
-                            lines.append(format_track_line(index, row[4], row[:4], row[5], row[6], width, height))
+                            records.append(track_record(index, row[4], row[:4], row[5], row[6], width, height))
             mode_label = "window"
         else:
             for key_pos, frame_path in enumerate(frames):
@@ -171,12 +187,21 @@ def main():
                     order = np.argsort(tracks[:, 5])[::-1]
                     for row_index in order:
                         row = tracks[row_index]
-                        lines.append(format_track_line(index, row[4], row[:4], row[5], row[6], width, height))
+                        records.append(track_record(index, row[4], row[:4], row[5], row[6], width, height))
             mode_label = "clip"
 
+        if args.no_temporal_stabilize:
+            stab_stats = {"track_class_changes": 0, "track_fragment_links": 0, "track_gap_fills": 0}
+        else:
+            records, stab_stats = stabilize_track_records(records)
+        lines = format_records(records)
         output = args.out / f"{seq_dir.name}.txt"
         output.write_text("".join(lines), encoding="utf-8")
-        print(f"{seq_dir.name}: {len(frames)} frames, {len(lines)} {mode_label} tracks -> {output}")
+        print(
+            f"{seq_dir.name}: {len(frames)} frames, {len(lines)} {mode_label} tracks -> {output} "
+            f"[temporal-stabilize cls_changes={stab_stats['track_class_changes']} "
+            f"links={stab_stats['track_fragment_links']} fills={stab_stats['track_gap_fills']}]"
+        )
 
 
 if __name__ == "__main__":
