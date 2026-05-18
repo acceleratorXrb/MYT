@@ -5,20 +5,20 @@ under `model_variants/` as a YAML file and can be printed with:
 
 ```bash
 python tools/model_variant.py list
-python tools/model_variant.py show track_tube_v7_2026-05-17
-python tools/model_variant.py train-command track_tube_v7_2026-05-17
+python tools/model_variant.py show cls_stable_v8_2026-05-18
+python tools/model_variant.py train-command cls_stable_v8_2026-05-18
 ```
 
 ## Current Main Variant
 
-- ID: `track_tube_v7_2026-05-17`
-- File: `model_variants/track_tube_v7_2026-05-17.yaml`
+- ID: `cls_stable_v8_2026-05-18`
+- File: `model_variants/cls_stable_v8_2026-05-18.yaml`
 - Summary: Official Mamba-YOLO-T backbone and neck are kept fixed. A new
-  TemporalResidualFeatureAdapter is added inside Detect_VID before the original
-  bbox/class branches. VisDrone track_id annotations are also used to build
-  same-object tubes inside each 16-frame window, adding class recall and
-  confidence-continuity losses that target flicker, missed detections, and
-  fragmentation.
+  TemporalResidualFeatureAdapter is applied only to the classification branch
+  inside Detect_VID, while bbox regression keeps the original current-frame
+  features. VisDrone track_id annotations build same-object tubes inside each
+  16-frame window, adding class recall, true-class confidence continuity, and
+  full class-distribution consistency losses for flicker/ID stability.
 
 ## Previous Main Variant
 
@@ -63,7 +63,8 @@ commit if an exact rerun is needed.
 
 | ID | Date | Backbone/Neck | Temporal Head | Notes |
 | --- | --- | --- | --- | --- |
-| `track_tube_v7_2026-05-17` | 2026-05-17 | Official Mamba-YOLO-T | P3/P4/P5 TRFA + track-id tube loss | Current main variant. Uses raw VisDrone track_id annotations to add tube class recall and same-track confidence continuity supervision. |
+| `cls_stable_v8_2026-05-18` | 2026-05-18 | Official Mamba-YOLO-T | P3/P4/P5 TRFA on cls branch + track-id tube losses | Current main variant. Protects bbox localization while adding same-track class distribution consistency for flicker and ID stability. |
+| `track_tube_v7_2026-05-17` | 2026-05-17 | Official Mamba-YOLO-T | P3/P4/P5 TRFA + track-id tube loss | Previous main variant. Uses raw VisDrone track_id annotations to add tube class recall and same-track confidence continuity supervision. |
 | `temporal_residual_v6_2026-05-16` | 2026-05-16 | Official Mamba-YOLO-T | P3/P4/P5 TemporalResidualFeatureAdapter | Previous main variant. Removes old proposal/score-smoothing branches and adapts local temporal features before bbox/class Detect branches. |
 | `score_smooth_v5_2026-05-14` | 2026-05-14 | Official Mamba-YOLO-T | TemporalScoreSmoother | Previous main variant. Simple score-level temporal smoothing and positive confidence boost; no feature adapter, no proposal refiner in the main path. |
 | `temporal_adapter_p4p5_yolov_v4_2026-05-14` | 2026-05-14 | Official Mamba-YOLO-T | P4/P5 TemporalFeatureAdapter + YOLOV-style proposal refinement | Previous main variant. Bypasses P3 to protect small-object recall while keeping temporal feature aggregation on P4/P5. |

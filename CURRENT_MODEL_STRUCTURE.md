@@ -3,16 +3,16 @@
 This file marks the model structure currently used as the main VID experiment
 configuration in this repository.
 
-Last updated: 2026-05-16
+Last updated: 2026-05-18
 
 ## Model Name
 
-**Mamba-YOLO-T-VID with TRFA and Track-ID Tube Supervision**
+**Mamba-YOLO-T-VID with Classification-Branch TRFA and Track-ID Tube Supervision**
 
 Short name used in notes:
 
 ```text
-Mamba-YOLO-T-VID-TrackTube-v7
+Mamba-YOLO-T-VID-ClsStable-v8
 ```
 
 ## Fixed Backbone and Neck
@@ -42,15 +42,16 @@ P3/P4/P5 window features
        1x1 expand
        residual alpha gate
   -> original YOLOv8/Mamba-YOLO Detect branches
-       cv2 -> bbox distribution
-       cv3 -> class logits
+       cv2(original features) -> bbox distribution
+       cv3(temporal features) -> class logits
   -> output bbox regression + class logits
 ```
 
 This replaces the failed score-level smoothing path. Temporal information now
-acts before the bbox/classification branches, so both localization and class
-prediction can learn from nearby frames. The residual gate is initialized as an
-identity path and can be warmed up during training.
+acts only on the classification branch. The bbox branch keeps original
+current-frame features to protect localization and avoid creating unstable boxes
+that hurt tracking. The residual gate is initialized as an identity path and can
+be warmed up during training.
 
 ## Current Training-Time Video Supervision
 
@@ -65,6 +66,7 @@ GT labels with track_id
   -> sample Detect_VID class logits at GT box centers on P3/P4/P5
   -> tube class recall loss
   -> same-track confidence continuity loss
+  -> same-track full class-distribution consistency loss
 ```
 
 This is the current primary video-metric optimization path. It directly targets
@@ -79,11 +81,13 @@ feature fusion alone.
 --num_ref_frames 15
 --temporal_fusion trfa
 --trfa_levels all
+--trfa_branch cls
 --ref_aux_loss 0.0
 --trfa_warmup_epochs 5
 --trfa_alpha_target 1.0
 --track_recall_loss 0.5
 --track_consistency_loss 0.2
+--track_cls_consistency_loss 0.1
 ```
 
 ## What These Options Mean
@@ -97,6 +101,9 @@ frames in the window are treated as key frames.
 setting because the goal is a real video-detection module, not a weak score-only
 post-processing path.
 
+`trfa_branch=cls` means temporal features are used only by the classification
+branch. Box regression stays center-frame based.
+
 `trfa_warmup_epochs` and `trfa_alpha_target` warm up the residual adapter gate.
 
 `track_recall_loss` encourages each GT object in a track tube to keep a strong
@@ -104,6 +111,9 @@ class response at its center location.
 
 `track_consistency_loss` pulls lower same-track class confidence toward the best
 same-track confidence inside the window, reducing temporal dropouts.
+
+`track_cls_consistency_loss` aligns the full class probability distribution for
+the same `track_id` across the window, directly targeting class flicker.
 
 ## Supported Modes
 

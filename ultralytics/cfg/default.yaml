@@ -129,8 +129,10 @@ vid_window_size: 0 # (int) frames per window when vid_clip_mode=window; 0 defaul
 ref_aux_loss: 0.0 # (float) auxiliary detection loss weight for reference frames in VID clip training
 track_recall_loss: 0.0 # (float) track-id tube class recall loss weight for VID window training
 track_consistency_loss: 0.0 # (float) same-track temporal confidence consistency loss weight for VID window training
+track_cls_consistency_loss: 0.0 # (float) same-track full class-distribution consistency loss weight for VID window training
 temporal_fusion: trfa # (str) Detect_VID temporal fusion: trfa | none
 trfa_levels: all # (str) feature pyramid levels for temporal residual feature adapter: all | p3 | p4 | p5 | p3p4 | p4p5 | none
+trfa_branch: cls # (str) branch that receives temporal features: cls | box | both | none
 trfa_warmup_epochs: 0.0 # (float) epochs to linearly warm temporal residual adapter alpha; 0 disables
 trfa_alpha_target: 1.0 # (float) target temporal residual adapter alpha value at the end of warmup
 debug_clip_shape: False # (bool) print first training batch image shape and clip layout

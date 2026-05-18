@@ -92,6 +92,7 @@ class DetectionTrainer(BaseTrainer):
                 head.num_ref_frames = int(getattr(self.args, "num_ref_frames", head.num_ref_frames))
                 head.temporal_fusion = getattr(self.args, "temporal_fusion", "trfa")
                 head.trfa_levels = str(getattr(self.args, "trfa_levels", "all") or "all")
+                head.trfa_branch = str(getattr(self.args, "trfa_branch", "cls") or "cls")
                 head.debug_vid_head = bool(getattr(self.args, "debug_vid_head", False))
         if getattr(self.args, "debug_clip_shape", False) and not getattr(self, "_debug_clip_shape_printed", False):
             clip_layout = batch.get("clip_layout")
@@ -147,8 +148,9 @@ class DetectionTrainer(BaseTrainer):
             if (
                 float(getattr(self.args, "track_recall_loss", 0.0) or 0.0) > 0.0
                 or float(getattr(self.args, "track_consistency_loss", 0.0) or 0.0) > 0.0
+                or float(getattr(self.args, "track_cls_consistency_loss", 0.0) or 0.0) > 0.0
             ):
-                loss_names.extend(["tube_cls_loss", "tube_cons_loss"])
+                loss_names.extend(["tube_cls_loss", "tube_cons_loss", "tube_dist_loss"])
         self.loss_names = tuple(loss_names)
         return yolo.detect.DetectionValidator(
             self.test_loader, save_dir=self.save_dir, args=copy(self.args), _callbacks=self.callbacks

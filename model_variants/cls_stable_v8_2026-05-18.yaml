@@ -1,14 +1,14 @@
-id: track_tube_v7_2026-05-17
-date: "2026-05-17"
-name: Mamba-YOLO-T-VID-TrackTube-v7
-status: previous_main_archived
+id: cls_stable_v8_2026-05-18
+date: "2026-05-18"
+name: Mamba-YOLO-T-VID-ClsStable-v8
+status: current_main
 
 constraint:
   keep_backbone: official Mamba-YOLO-T
   keep_neck: official Mamba-YOLO-T neck / feature pyramid
   editable_parts:
     - VID input window organization
-    - Detect_VID temporal feature adapter
+    - Detect_VID temporal classification adapter
     - track-id tube supervision in the loss
     - offline video detection / flicker / MOT-ID evaluation path
 
@@ -24,15 +24,18 @@ architecture:
     name: Detect_VID
     temporal_module:
       name: TemporalResidualFeatureAdapter
-      placement: before the original Detect bbox/class branches
+      placement: before Detect branches
       levels: P3/P4/P5
+      branch: cls
+      reason: preserve current-frame bbox regression while stabilizing classification logits
   track_tube_supervision:
     source: raw VisDrone2019-VID annotations track_id field
     placement: v8VIDDetectionLoss
     losses:
       - tube class recall loss sampled at GT box centers on P3/P4/P5
-      - same-track confidence continuity loss inside each video window
-  output: per-frame bbox regression and class scores from temporally adapted features
+      - same-track true-class confidence continuity loss inside each window
+      - same-track full class-distribution consistency loss inside each window
+  output: per-frame bbox regression from original features and class scores from temporally adapted features
 
 main_hyperparameters:
   vid_clip_mode: window
@@ -42,10 +45,12 @@ main_hyperparameters:
   ref_sample: adjacent
   temporal_fusion: trfa
   trfa_levels: all
+  trfa_branch: cls
   trfa_warmup_epochs: 5
   trfa_alpha_target: 1.0
   track_recall_loss: 0.5
   track_consistency_loss: 0.2
+  track_cls_consistency_loss: 0.1
   ref_aux_loss: 0.0
 
 training_command:
@@ -135,10 +140,14 @@ training_command:
   - "0.5"
   - --track_consistency_loss
   - "0.2"
+  - --track_cls_consistency_loss
+  - "0.1"
   - --temporal_fusion
   - trfa
   - --trfa_levels
   - all
+  - --trfa_branch
+  - cls
   - --trfa_warmup_epochs
   - "5"
   - --trfa_alpha_target
@@ -152,9 +161,9 @@ training_command:
   - --project
   - output_dir/visdrone_vid
   - --name
-  - track_tube_v7
+  - cls_stable_v8
 
 notes:
-  - This is the current main direction: video metrics are optimized with explicit track_id supervision.
-  - The official Mamba-YOLO-T backbone and neck remain unchanged.
-  - If raw VisDrone annotations are missing, track_ids become -1 and tube losses are skipped.
+  - This replaces the failed TTRM direction with an in-model, no-output-amplification change.
+  - The bbox branch uses original current-frame features to protect localization and avoid track explosion.
+  - The classification branch uses temporal features plus same-track class distribution consistency to target flicker and ID switches.

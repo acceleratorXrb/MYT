@@ -13,7 +13,7 @@ object detection. The current research constraint is:
 Current variant:
 
 ```text
-Mamba-YOLO-T-VID-TrackTube-v7
+Mamba-YOLO-T-VID-ClsStable-v8
 ```
 
 High-level flow:
@@ -23,20 +23,21 @@ High-level flow:
   -> official Mamba-YOLO-T backbone
   -> official Mamba-YOLO-T neck / feature pyramid
   -> Detect_VID
-      - TemporalResidualFeatureAdapter on P3/P4/P5
-      - YOLOv8-style bbox regression branch
-      - YOLOv8-style classification branch
+      - TemporalResidualFeatureAdapter on P3/P4/P5 classification branch
+      - YOLOv8-style bbox regression branch from original features
+      - YOLOv8-style classification branch from temporal features
   -> track-id tube supervision during training
       - tube class recall loss
       - same-track confidence continuity loss
+      - same-track class distribution consistency loss
       -> offline VID detections / flicker / MOT-ID metrics
 ```
 
 The official backbone and neck are not structurally modified. The current v6
 experiment removes the older score-smoothing/proposal branches and uses one
 simple temporal residual feature adapter before the Detect branches, so both
-box regression and classification can receive local video context. The current
-training objective also uses VisDrone `track_id` annotations to supervise
+the classification branch can receive local video context while bbox regression
+keeps current-frame features. The current training objective also uses VisDrone `track_id` annotations to supervise
 same-object temporal continuity inside each 16-frame window.
 
 ## Quick Start
@@ -49,16 +50,16 @@ source .venv/bin/activate
 git pull
 git submodule update --init --recursive
 
-python tools/model_variant.py train-command track_tube_v7_2026-05-17 \
-  --name track_tube_v7
+python tools/model_variant.py train-command cls_stable_v8_2026-05-18 \
+  --name cls_stable_v8
 ```
 
 To inspect saved model variants:
 
 ```bash
 python tools/model_variant.py list
-python tools/model_variant.py show track_tube_v7_2026-05-17
-python tools/model_variant.py train-command track_tube_v7_2026-05-17
+python tools/model_variant.py show cls_stable_v8_2026-05-18
+python tools/model_variant.py train-command cls_stable_v8_2026-05-18
 ```
 
 ## Important Files
@@ -91,7 +92,8 @@ python tools/model_variant.py train-command track_tube_v7_2026-05-17
 | Path | Purpose |
 | --- | --- |
 | `model_variants/README.md` | Explains the model-variant record directory. |
-| `model_variants/track_tube_v7_2026-05-17.yaml` | Current main model record: TRFA plus track-id tube supervision, key hyperparameters, notes, and training command. |
+| `model_variants/cls_stable_v8_2026-05-18.yaml` | Current main model record: classification-branch TRFA plus track-id tube supervision, key hyperparameters, notes, and training command. |
+| `model_variants/track_tube_v7_2026-05-17.yaml` | Previous main model record: TRFA plus track-id tube supervision. |
 | `model_variants/temporal_residual_v6_2026-05-16.yaml` | Previous temporal residual feature adapter model record kept for rollback and ablation. |
 | `model_variants/score_smooth_v5_2026-05-14.yaml` | Previous score-smoothing model record kept for rollback and ablation. |
 | `model_variants/temporal_adapter_p4p5_yolov_v4_2026-05-14.yaml` | Previous P4/P5 temporal adapter model record for rollback and ablation. |
@@ -149,7 +151,7 @@ git submodule update --init --recursive
 
 ## Current Main Hyperparameters
 
-These options define `Mamba-YOLO-T-VID-TrackTube-v7`:
+These options define `Mamba-YOLO-T-VID-ClsStable-v8`:
 
 ```bash
 --vid_clip_mode window
@@ -157,10 +159,12 @@ These options define `Mamba-YOLO-T-VID-TrackTube-v7`:
 --num_ref_frames 15
 --temporal_fusion trfa
 --trfa_levels all
+--trfa_branch cls
 --trfa_warmup_epochs 5
 --trfa_alpha_target 1.0
 --track_recall_loss 0.5
 --track_consistency_loss 0.2
+--track_cls_consistency_loss 0.1
 ```
 
 If these options or the head structure change substantially, treat the result as
@@ -198,7 +202,8 @@ Recommended comparisons:
 - Official Mamba-YOLO-T baseline: single-frame Mamba-YOLO.
 - Official YOLOv8 baseline: single-frame YOLOv8.
 - Current new model: Mamba-YOLO-T backbone/neck plus temporal residual feature
-  adaptation inside `Detect_VID` and track-id tube supervision in the loss.
+  adaptation on the `Detect_VID` classification branch and track-id tube
+  supervision in the loss.
 - Ablations: compare `trfa_levels all/p3p4/p4p5`, vary `trfa_alpha_target`,
   compare against `temporal_fusion none`.
 

@@ -81,6 +81,7 @@ class DetectionValidator(BaseValidator):
                 head.reset_buffer()
                 head.temporal_fusion = str(getattr(self.args, "temporal_fusion", "trfa") or "trfa")
                 head.trfa_levels = str(getattr(self.args, "trfa_levels", "all") or "all")
+                head.trfa_branch = str(getattr(self.args, "trfa_branch", "cls") or "cls")
 
         if self.args.save_hybrid:
             height, width = batch["img"].shape[2:]

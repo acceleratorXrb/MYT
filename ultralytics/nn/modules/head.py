@@ -127,6 +127,7 @@ class Detect_VID(Detect):
         self.num_ref_frames = int(num_ref_frames)
         self.temporal_fusion = "trfa"
         self.trfa_levels = "all"
+        self.trfa_branch = "cls"
         self.temporal_adapters = nn.ModuleList(TemporalResidualFeatureAdapter(c, reduction=2) for c in ch)
         self.debug_vid_head = False
         self._debug_vid_head_printed = 0
@@ -169,6 +170,18 @@ class Detect_VID(Detect):
     def _head_from_feature(self, i: int, feat: torch.Tensor) -> torch.Tensor:
         return torch.cat((self.cv2[i](feat), self.cv3[i](feat)), 1)
 
+    def _head_from_temporal_feature(self, i: int, feat: torch.Tensor, adapted: torch.Tensor) -> torch.Tensor:
+        branch = str(getattr(self, "trfa_branch", "cls") or "cls").lower()
+        if self._fusion_mode() == "none" or branch == "none" or not self._level_enabled(i):
+            return self._head_from_feature(i, feat)
+        if branch == "both":
+            return self._head_from_feature(i, adapted)
+        if branch == "box":
+            return torch.cat((self.cv2[i](adapted), self.cv3[i](feat)), 1)
+        if branch == "cls":
+            return torch.cat((self.cv2[i](feat), self.cv3[i](adapted)), 1)
+        raise ValueError(f"trfa_branch must be cls|box|both|none, got {branch!r}")
+
     def _adapt_window_feature(self, i: int, feat: torch.Tensor, B: int, T: int) -> torch.Tensor:
         if self._fusion_mode() == "none" or T <= 1 or not self._level_enabled(i):
             return feat
@@ -181,11 +194,11 @@ class Detect_VID(Detect):
         _, C, H, W = adapted.shape
 
         if self.clip_all_keys:
-            out = self._head_from_feature(i, adapted)
+            out = self._head_from_temporal_feature(i, feat, adapted)
             if self.debug_vid_head and self._debug_vid_head_printed < 4:
                 print(
                     f"[debug-vid-head] mode=window level={i} B={B} T={T} fusion={self._fusion_mode()} "
-                    f"trfa_levels={self.trfa_levels} enabled={self._level_enabled(i)} "
+                    f"trfa_levels={self.trfa_levels} branch={self.trfa_branch} enabled={self._level_enabled(i)} "
                     f"alpha={float(self.temporal_adapters[i].alpha.detach().cpu()):.4g} "
                     f"in_shape={tuple(feat.shape)} out_shape={tuple(out.shape)}",
                     flush=True,
@@ -194,15 +207,18 @@ class Detect_VID(Detect):
             return out
 
         adapted_clip = adapted.reshape(B, T, C, H, W)
+        feat_clip = feat.reshape(B, T, C, H, W)
         key_feat = adapted_clip[:, 0].reshape(B, C, H, W)
-        out = self._head_from_feature(i, key_feat)
+        raw_key_feat = feat_clip[:, 0].reshape(B, C, H, W)
+        out = self._head_from_temporal_feature(i, raw_key_feat, key_feat)
         if self.training and self.aux_outputs is not None and T > 1:
             ref_feat = adapted_clip[:, 1:].reshape(B * (T - 1), C, H, W)
-            self.aux_outputs.append(self._head_from_feature(i, ref_feat))
+            raw_ref_feat = feat_clip[:, 1:].reshape(B * (T - 1), C, H, W)
+            self.aux_outputs.append(self._head_from_temporal_feature(i, raw_ref_feat, ref_feat))
         if self.debug_vid_head and self._debug_vid_head_printed < 4:
             print(
                 f"[debug-vid-head] mode=center level={i} B={B} T={T} fusion={self._fusion_mode()} "
-                f"trfa_levels={self.trfa_levels} enabled={self._level_enabled(i)} "
+                f"trfa_levels={self.trfa_levels} branch={self.trfa_branch} enabled={self._level_enabled(i)} "
                 f"alpha={float(self.temporal_adapters[i].alpha.detach().cpu()):.4g} "
                 f"in_shape={tuple(feat.shape)} out_shape={tuple(out.shape)}",
                 flush=True,
@@ -230,11 +246,12 @@ class Detect_VID(Detect):
         buf.append(feat.detach())
         if len(buf) > max_refs:
             del buf[:-max_refs]
-        out = self._head_from_feature(i, adapted)
+        out = self._head_from_temporal_feature(i, feat, adapted)
         if self.debug_vid_head and self._debug_vid_head_printed < 4:
             print(
                 f"[debug-vid-head] mode=stream level={i} B={B} fusion={self._fusion_mode()} "
-                f"ref_count={len(valid)} alpha={float(self.temporal_adapters[i].alpha.detach().cpu()):.4g} "
+                f"ref_count={len(valid)} branch={self.trfa_branch} "
+                f"alpha={float(self.temporal_adapters[i].alpha.detach().cpu()):.4g} "
                 f"out_shape={tuple(out.shape)}",
                 flush=True,
             )

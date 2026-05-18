@@ -34,6 +34,7 @@ def parse_args():
     parser.add_argument("--window_size", type=int, default=16, help="Frames per window when --all_keys is enabled.")
     parser.add_argument("--temporal_fusion", default=None, choices=["trfa", "none"])
     parser.add_argument("--trfa_levels", default=None, choices=["all", "p3", "p4", "p5", "p3p4", "p4p5", "none"])
+    parser.add_argument("--trfa_branch", default=None, choices=["cls", "box", "both", "none"])
     parser.add_argument("--speed_json", type=Path, default=None, help="Optional JSON path for export FPS statistics.")
     return parser.parse_args()
 
@@ -120,6 +121,8 @@ def configure_temporal_options(model, args):
                 module.temporal_fusion = args.temporal_fusion
             if args.trfa_levels is not None:
                 module.trfa_levels = args.trfa_levels
+            if args.trfa_branch is not None:
+                module.trfa_branch = args.trfa_branch
 
 
 def load_clip(frame_paths, imgsz, stride, return_all=False):

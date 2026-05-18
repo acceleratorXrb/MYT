@@ -265,7 +265,8 @@ class v8VIDDetectionLoss(v8DetectionLoss):
         """Use VisDrone track_id tubes to supervise class recall and temporal score continuity."""
         recall_gain = float(getattr(self.hyp, "track_recall_loss", 0.0) or 0.0)
         consistency_gain = float(getattr(self.hyp, "track_consistency_loss", 0.0) or 0.0)
-        if recall_gain <= 0.0 and consistency_gain <= 0.0:
+        cls_consistency_gain = float(getattr(self.hyp, "track_cls_consistency_loss", 0.0) or 0.0)
+        if recall_gain <= 0.0 and consistency_gain <= 0.0 and cls_consistency_gain <= 0.0:
             return None
         if (
             "track_ids" not in batch
@@ -293,11 +294,12 @@ class v8VIDDetectionLoss(v8DetectionLoss):
         for feat in feats:
             _, _, h, w = feat.shape
             cls_logits = feat[:, self.reg_max * 4 :, :, :]
-            bi = batch_idx.clamp_(0, cls_logits.shape[0] - 1)
+            bi = batch_idx.clamp(0, cls_logits.shape[0] - 1)
             x = (bboxes[:, 0] * w).long().clamp_(0, w - 1)
             y = (bboxes[:, 1] * h).long().clamp_(0, h - 1)
             per_level_logits.append(cls_logits[bi, :, y, x])
         logits = torch.stack(per_level_logits, dim=0).mean(0)
+        probs = logits.sigmoid()
 
         recall_loss = F.cross_entropy(logits, cls, reduction="mean")
         gt_logits = logits[torch.arange(len(cls), device=self.device), cls]
@@ -307,6 +309,7 @@ class v8VIDDetectionLoss(v8DetectionLoss):
         window_ids = torch.div(batch_idx, max(T, 1), rounding_mode="floor")
         group_ids = window_ids * 10000000 + track_ids
         continuity_terms = []
+        cls_distribution_terms = []
         for gid in torch.unique(group_ids):
             mask = group_ids == gid
             if mask.sum() < 2:
@@ -314,11 +317,18 @@ class v8VIDDetectionLoss(v8DetectionLoss):
             p = gt_prob[mask]
             target = p.max().detach()
             continuity_terms.append(torch.relu(target - p).pow(2).mean())
+            dist = probs[mask]
+            dist_target = dist.mean(0, keepdim=True).detach()
+            cls_distribution_terms.append(F.mse_loss(dist, dist_target.expand_as(dist), reduction="mean"))
         if continuity_terms:
             consistency_loss = torch.stack(continuity_terms).mean()
         else:
             consistency_loss = gt_prob.new_zeros(())
-        return recall_loss, consistency_loss
+        if cls_distribution_terms:
+            cls_distribution_loss = torch.stack(cls_distribution_terms).mean()
+        else:
+            cls_distribution_loss = gt_prob.new_zeros(())
+        return recall_loss, consistency_loss, cls_distribution_loss
 
     def __call__(self, preds, batch):
         total_loss, loss_items = super().__call__(preds, batch)
@@ -353,13 +363,17 @@ class v8VIDDetectionLoss(v8DetectionLoss):
 
         tube = self._track_tube_loss(feats, batch)
         if tube is not None:
-            recall_loss, consistency_loss = tube
+            recall_loss, consistency_loss, cls_distribution_loss = tube
             recall_gain = float(getattr(self.hyp, "track_recall_loss", 0.0) or 0.0)
             consistency_gain = float(getattr(self.hyp, "track_consistency_loss", 0.0) or 0.0)
+            cls_consistency_gain = float(getattr(self.hyp, "track_cls_consistency_loss", 0.0) or 0.0)
             scaled_recall = recall_gain * recall_loss
             scaled_consistency = consistency_gain * consistency_loss
-            total_loss = total_loss + feats[0].shape[0] * (scaled_recall + scaled_consistency)
-            extra_items.append(torch.stack((scaled_recall.detach(), scaled_consistency.detach())))
+            scaled_cls_distribution = cls_consistency_gain * cls_distribution_loss
+            total_loss = total_loss + feats[0].shape[0] * (scaled_recall + scaled_consistency + scaled_cls_distribution)
+            extra_items.append(
+                torch.stack((scaled_recall.detach(), scaled_consistency.detach(), scaled_cls_distribution.detach()))
+            )
 
         if extra_items:
             return total_loss, torch.cat((loss_items, *extra_items))

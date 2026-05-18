@@ -155,7 +155,9 @@ def build_extra_eval_callback(opt):
                 )
                 if opt.extra_eval_window_inference:
                     export_cmd.extend(["--all_keys", "--window_size", opt.vid_window_size or opt.num_ref_frames + 1])
-                export_cmd.extend(["--temporal_fusion", opt.temporal_fusion, "--trfa_levels", opt.trfa_levels])
+                export_cmd.extend(
+                    ["--temporal_fusion", opt.temporal_fusion, "--trfa_levels", opt.trfa_levels, "--trfa_branch", opt.trfa_branch]
+                )
             else:
                 export_cmd.extend(["--batch", opt.extra_eval_batch])
             steps.append(run_extra_eval_step("export_detections", export_cmd, strict))
@@ -214,7 +216,9 @@ def build_extra_eval_callback(opt):
                 )
                 if opt.extra_eval_window_inference:
                     track_cmd.extend(["--all_keys", "--window_size", opt.vid_window_size or opt.num_ref_frames + 1])
-                track_cmd.extend(["--temporal_fusion", opt.temporal_fusion, "--trfa_levels", opt.trfa_levels])
+                    track_cmd.extend(
+                        ["--temporal_fusion", opt.temporal_fusion, "--trfa_levels", opt.trfa_levels, "--trfa_branch", opt.trfa_branch]
+                    )
             steps.append(run_extra_eval_step("export_tracks", track_cmd, strict))
             steps.append(
                 run_extra_eval_step(
@@ -274,7 +278,7 @@ def build_trfa_warmup_callback(opt):
     return on_train_epoch_start
 
 
-def set_detect_vid_temporal_fusion(model, mode, trfa_levels=None):
+def set_detect_vid_temporal_fusion(model, mode, trfa_levels=None, trfa_branch=None):
     """Set Detect_VID temporal residual feature adapter options."""
     try:
         from ultralytics.nn.modules import Detect_VID
@@ -293,6 +297,8 @@ def set_detect_vid_temporal_fusion(model, mode, trfa_levels=None):
                 module.temporal_fusion = mode
                 if trfa_levels is not None:
                     module.trfa_levels = str(trfa_levels)
+                if trfa_branch is not None:
+                    module.trfa_branch = str(trfa_branch)
                 count += 1
     return count
 
@@ -415,8 +421,10 @@ def parse_opt():
     parser.add_argument('--ref_aux_loss', type=float, default=0.0, help='auxiliary detection loss weight for reference frames')
     parser.add_argument('--track_recall_loss', type=float, default=0.0, help='track-id tube class recall loss weight for VID window training')
     parser.add_argument('--track_consistency_loss', type=float, default=0.0, help='same-track temporal confidence consistency loss weight for VID window training')
+    parser.add_argument('--track_cls_consistency_loss', type=float, default=0.0, help='same-track full class-distribution consistency loss weight for VID window training')
     parser.add_argument('--temporal_fusion', default='trfa', choices=['trfa', 'none'], help='Detect_VID temporal fusion mode')
     parser.add_argument('--trfa_levels', default='all', choices=['all', 'p3', 'p4', 'p5', 'p3p4', 'p4p5', 'none'], help='feature pyramid levels where temporal residual feature adapter is applied')
+    parser.add_argument('--trfa_branch', default='cls', choices=['cls', 'box', 'both', 'none'], help='Detect_VID branch that receives temporally adapted features')
     parser.add_argument('--trfa_warmup_epochs', type=float, default=0.0, help='linearly warm temporal residual adapter alpha for this many epochs; 0 disables')
     parser.add_argument('--trfa_alpha_target', type=float, default=1.0, help='target temporal residual adapter alpha value at the end of warmup')
     parser.add_argument('--debug_clip_shape', action='store_true', help='print the first training batch image shape and clip layout')
@@ -467,8 +475,10 @@ if __name__ == '__main__':
         "ref_aux_loss": opt.ref_aux_loss,
         "track_recall_loss": opt.track_recall_loss,
         "track_consistency_loss": opt.track_consistency_loss,
+        "track_cls_consistency_loss": opt.track_cls_consistency_loss,
         "temporal_fusion": opt.temporal_fusion,
         "trfa_levels": opt.trfa_levels,
+        "trfa_branch": opt.trfa_branch,
         "trfa_warmup_epochs": opt.trfa_warmup_epochs,
         "trfa_alpha_target": opt.trfa_alpha_target,
         "debug_clip_shape": opt.debug_clip_shape,
@@ -494,13 +504,13 @@ if __name__ == '__main__':
             args[k] = True
     model_path = resolve_path(opt.weights) if opt.weights else resolve_path(opt.config)
     model = YOLO(model_path)
-    set_detect_vid_temporal_fusion(model, opt.temporal_fusion, opt.trfa_levels)
+    set_detect_vid_temporal_fusion(model, opt.temporal_fusion, opt.trfa_levels, opt.trfa_branch)
     if task == "train":
         if opt.init_weights:
             init_weights = resolve_path(opt.init_weights)
             print(f"[init-weights] loading partial weights from {init_weights}", flush=True)
             model.load(init_weights)
-            set_detect_vid_temporal_fusion(model, opt.temporal_fusion, opt.trfa_levels)
+            set_detect_vid_temporal_fusion(model, opt.temporal_fusion, opt.trfa_levels, opt.trfa_branch)
         if opt.trfa_warmup_epochs > 0:
             model.add_callback("on_train_epoch_start", build_trfa_warmup_callback(opt))
         if opt.extra_eval_period > 0:
