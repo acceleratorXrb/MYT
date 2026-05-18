@@ -104,12 +104,10 @@ def build_extra_eval_callback(opt):
 
         out_root = Path(trainer.save_dir) / "extra_eval" / f"epoch{epoch:03d}"
         detections_dir = out_root / "detections"
-        raw_detections_dir = out_root / "detections_raw" if opt.extra_eval_ttrm else detections_dir
         tracks_dir = out_root / "tracks"
         flicker_json = out_root / "flicker.json"
         mot_json = out_root / "mot.json"
         speed_json = out_root / "speed.json"
-        ttrm_json = out_root / "ttrm.json"
         summary_json = out_root / "summary.json"
         out_root.mkdir(parents=True, exist_ok=True)
 
@@ -132,7 +130,7 @@ def build_extra_eval_callback(opt):
                 "--source",
                 official_root,
                 "--out",
-                raw_detections_dir,
+                detections_dir,
                 "--imgsz",
                 opt.imgsz,
                 "--device",
@@ -162,54 +160,6 @@ def build_extra_eval_callback(opt):
                 export_cmd.extend(["--batch", opt.extra_eval_batch])
             steps.append(run_extra_eval_step("export_detections", export_cmd, strict))
 
-            if opt.extra_eval_ttrm:
-                steps.append(
-                    run_extra_eval_step(
-                        "ttrm",
-                        [
-                            py,
-                            scripts / "refine_visdrone_vid_tubelets.py",
-                            "--pred",
-                            raw_detections_dir,
-                            "--out_det",
-                            detections_dir,
-                            "--out_tracks",
-                            tracks_dir,
-                            "--summary",
-                            ttrm_json,
-                            "--seed_score",
-                            opt.ttrm_seed_score,
-                            "--attach_score",
-                            opt.ttrm_attach_score,
-                            "--keep_score",
-                            opt.ttrm_keep_score,
-                            "--track_min_len",
-                            opt.ttrm_track_min_len,
-                            "--track_min_score",
-                            opt.ttrm_track_min_score,
-                            "--assoc_iou",
-                            opt.ttrm_assoc_iou,
-                            "--assoc_center_factor",
-                            opt.ttrm_assoc_center_factor,
-                            "--max_gap",
-                            opt.ttrm_max_gap,
-                            "--gap_fill",
-                            opt.ttrm_gap_fill,
-                            "--smooth",
-                            opt.ttrm_smooth,
-                            "--vote_gain",
-                            opt.ttrm_vote_gain,
-                            "--recall_gain",
-                            opt.ttrm_recall_gain,
-                            "--input_topk",
-                            opt.ttrm_input_topk,
-                            "--max_per_frame",
-                            opt.ttrm_max_per_frame,
-                        ],
-                        strict,
-                    )
-                )
-
             steps.append(
                 run_extra_eval_step(
                     "flicker",
@@ -226,47 +176,46 @@ def build_extra_eval_callback(opt):
                     strict,
                 )
             )
-            if not opt.extra_eval_ttrm:
-                track_export_script = (
-                    scripts / "export_visdrone_vid_clip_tracks.py"
-                    if use_clip_export
-                    else scripts / "export_visdrone_vid_tracks.py"
+            track_export_script = (
+                scripts / "export_visdrone_vid_clip_tracks.py"
+                if use_clip_export
+                else scripts / "export_visdrone_vid_tracks.py"
+            )
+            track_cmd = [
+                py,
+                track_export_script,
+                "--weights",
+                weights,
+                "--source",
+                official_root,
+                "--out",
+                tracks_dir,
+                "--tracker",
+                tracker,
+                "--imgsz",
+                opt.imgsz,
+                "--device",
+                opt.device,
+                "--conf",
+                opt.extra_eval_track_conf,
+                "--iou",
+                opt.extra_eval_iou,
+            ]
+            if use_clip_export:
+                track_cmd.extend(
+                    [
+                        "--num_ref_frames",
+                        opt.num_ref_frames,
+                        "--clip_stride",
+                        opt.clip_stride,
+                        "--ref_sample",
+                        opt.ref_sample if opt.ref_sample in {"adjacent", "causal"} else "adjacent",
+                    ]
                 )
-                track_cmd = [
-                    py,
-                    track_export_script,
-                    "--weights",
-                    weights,
-                    "--source",
-                    official_root,
-                    "--out",
-                    tracks_dir,
-                    "--tracker",
-                    tracker,
-                    "--imgsz",
-                    opt.imgsz,
-                    "--device",
-                    opt.device,
-                    "--conf",
-                    opt.extra_eval_track_conf,
-                    "--iou",
-                    opt.extra_eval_iou,
-                ]
-                if use_clip_export:
-                    track_cmd.extend(
-                        [
-                            "--num_ref_frames",
-                            opt.num_ref_frames,
-                            "--clip_stride",
-                            opt.clip_stride,
-                            "--ref_sample",
-                            opt.ref_sample if opt.ref_sample in {"adjacent", "causal"} else "adjacent",
-                        ]
-                    )
-                    if opt.extra_eval_window_inference:
-                        track_cmd.extend(["--all_keys", "--window_size", opt.vid_window_size or opt.num_ref_frames + 1])
-                    track_cmd.extend(["--temporal_fusion", opt.temporal_fusion, "--trfa_levels", opt.trfa_levels])
-                steps.append(run_extra_eval_step("export_tracks", track_cmd, strict))
+                if opt.extra_eval_window_inference:
+                    track_cmd.extend(["--all_keys", "--window_size", opt.vid_window_size or opt.num_ref_frames + 1])
+                track_cmd.extend(["--temporal_fusion", opt.temporal_fusion, "--trfa_levels", opt.trfa_levels])
+            steps.append(run_extra_eval_step("export_tracks", track_cmd, strict))
             steps.append(
                 run_extra_eval_step(
                     "mot",
@@ -296,11 +245,6 @@ def build_extra_eval_callback(opt):
                     payload["speed"] = json.loads(speed_json.read_text(encoding="utf-8"))
                 except json.JSONDecodeError as exc:
                     payload["speed_error"] = f"failed to parse {speed_json}: {exc}"
-            if ttrm_json.exists():
-                try:
-                    payload["ttrm"] = json.loads(ttrm_json.read_text(encoding="utf-8"))
-                except json.JSONDecodeError as exc:
-                    payload["ttrm_error"] = f"failed to parse {ttrm_json}: {exc}"
             summary_json.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
             print(f"[extra-eval] epoch {epoch} summary saved to {summary_json}", flush=True)
 
@@ -490,21 +434,6 @@ def parse_opt():
     parser.add_argument('--extra_eval_iou', type=float, default=0.7, help='NMS IoU threshold for extra eval exports')
     parser.add_argument('--extra_eval_clip_inference', action='store_true', help='export detections with explicit key+ref clip inference instead of streaming')
     parser.add_argument('--extra_eval_window_inference', action='store_true', help='export detections/tracks with non-overlapping VID windows; every frame is inferred once')
-    parser.add_argument('--extra_eval_ttrm', action='store_true', help='refine extra-eval detections with tubelet-level temporal consistency before flicker/MOT')
-    parser.add_argument('--ttrm_seed_score', type=float, default=0.05, help='TTRM minimum score for starting a new tubelet')
-    parser.add_argument('--ttrm_attach_score', type=float, default=0.001, help='TTRM minimum score for attaching to an existing tubelet')
-    parser.add_argument('--ttrm_keep_score', type=float, default=0.03, help='TTRM minimum refined score to output')
-    parser.add_argument('--ttrm_track_min_len', type=int, default=2, help='TTRM suppresses tubelets shorter than this unless very confident')
-    parser.add_argument('--ttrm_track_min_score', type=float, default=0.08, help='TTRM minimum max score for output tubelets')
-    parser.add_argument('--ttrm_assoc_iou', type=float, default=0.18, help='TTRM frame-to-frame association IoU gate')
-    parser.add_argument('--ttrm_assoc_center_factor', type=float, default=2.5, help='TTRM center-distance association gate in object-scale units')
-    parser.add_argument('--ttrm_max_gap', type=int, default=3, help='TTRM maximum frame gap for active tubelets')
-    parser.add_argument('--ttrm_gap_fill', type=int, default=2, help='TTRM interpolates missing detections for gaps up to this length')
-    parser.add_argument('--ttrm_smooth', type=float, default=0.55, help='TTRM box smoothing weight toward the temporal moving average')
-    parser.add_argument('--ttrm_vote_gain', type=float, default=0.75, help='TTRM class-vote score gain for tubelet majority category')
-    parser.add_argument('--ttrm_recall_gain', type=float, default=0.65, help='TTRM score propagation gain from tubelet max score')
-    parser.add_argument('--ttrm_input_topk', type=int, default=180, help='TTRM maximum raw detections kept per frame before association')
-    parser.add_argument('--ttrm_max_per_frame', type=int, default=300, help='TTRM maximum refined outputs per frame')
     parser.add_argument('--skip_metric_self_check', action='store_true', help='skip synthetic flicker/MOT metric self-check before periodic extra eval')
     parser.add_argument('--extra_eval_strict', action='store_true', help='fail training if an extra-eval step fails')
     opt = parser.parse_args()

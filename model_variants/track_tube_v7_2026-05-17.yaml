@@ -1,7 +1,7 @@
 id: track_tube_v7_2026-05-17
 date: "2026-05-17"
 name: Mamba-YOLO-T-VID-TrackTube-v7
-status: previous_main_archived
+status: current_main
 
 constraint:
   keep_backbone: official Mamba-YOLO-T
