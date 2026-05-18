@@ -378,6 +378,11 @@ class BYTETracker:
         # TODO: mot20
         # if not self.args.mot20:
         dists = matching.fuse_score(dists, detections)
+        class_weight = float(getattr(self.args, "class_match_weight", 0.0) or 0.0)
+        if class_weight > 0.0 and len(tracks) and len(detections):
+            track_cls = np.asarray([getattr(t, "cls", -1) for t in tracks]).reshape(-1, 1)
+            det_cls = np.asarray([getattr(d, "cls", -1) for d in detections]).reshape(1, -1)
+            dists = np.minimum(dists + (track_cls != det_cls).astype(np.float32) * class_weight, 1.0)
         return dists
 
     def multi_predict(self, tracks):

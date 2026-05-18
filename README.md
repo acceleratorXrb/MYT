@@ -13,7 +13,7 @@ object detection. The current research constraint is:
 Current variant:
 
 ```text
-Mamba-YOLO-T-VID-VideoStable-v9
+Mamba-YOLO-T-VID-VideoStable-v10
 ```
 
 High-level flow:
@@ -54,16 +54,16 @@ source .venv/bin/activate
 git pull
 git submodule update --init --recursive
 
-python tools/model_variant.py train-command video_stable_v9_2026-05-18 \
-  --name video_stable_v9
+python tools/model_variant.py train-command video_stable_v10_2026-05-18 \
+  --name video_stable_v10
 ```
 
 To inspect saved model variants:
 
 ```bash
 python tools/model_variant.py list
-python tools/model_variant.py show video_stable_v9_2026-05-18
-python tools/model_variant.py train-command video_stable_v9_2026-05-18
+python tools/model_variant.py show video_stable_v10_2026-05-18
+python tools/model_variant.py train-command video_stable_v10_2026-05-18
 ```
 
 ## Important Files
@@ -96,7 +96,8 @@ python tools/model_variant.py train-command video_stable_v9_2026-05-18
 | Path | Purpose |
 | --- | --- |
 | `model_variants/README.md` | Explains the model-variant record directory. |
-| `model_variants/video_stable_v9_2026-05-18.yaml` | Current main experiment record: classification-branch TRFA, track-id tube supervision, GT-free video export stabilization, key hyperparameters, notes, and training command. |
+| `model_variants/video_stable_v10_2026-05-18.yaml` | Current main experiment record: classification-branch TRFA, track-id tube supervision, VID-stable ByteTrack, GT-free video export stabilization, key hyperparameters, notes, and training command. |
+| `model_variants/video_stable_v9_2026-05-18.yaml` | Previous video-stable model record. |
 | `model_variants/cls_stable_v8_2026-05-18.yaml` | Previous main model record: classification-branch TRFA plus track-id tube supervision. |
 | `model_variants/track_tube_v7_2026-05-17.yaml` | Previous main model record: TRFA plus track-id tube supervision. |
 | `model_variants/temporal_residual_v6_2026-05-16.yaml` | Previous temporal residual feature adapter model record kept for rollback and ablation. |
@@ -133,6 +134,7 @@ When a new architecture stage becomes important, add a new YAML file under
 | `tools/eval_visdrone_vid_official.py` | Wrapper for official VisDrone AP/AR evaluation. Periodic extra-eval does not run official AP/AR by default. |
 | `tools/run_visdrone_vid_official_eval.py` | Manual official VisDrone VID evaluation runner. |
 | `tools/temporal_state.py` | Helper for resetting temporal state across video sequences. |
+| `ultralytics/cfg/trackers/bytetrack_vidstable.yaml` | VID-stable ByteTrack config: longer lost-track buffer, lower second-stage threshold, and a small class-aware association penalty. |
 
 ### Qualitative Comparison Tools
 
@@ -157,7 +159,7 @@ git submodule update --init --recursive
 
 ## Current Main Hyperparameters
 
-These options define `Mamba-YOLO-T-VID-VideoStable-v9`:
+These options define `Mamba-YOLO-T-VID-VideoStable-v10`:
 
 ```bash
 --vid_clip_mode window
@@ -171,11 +173,14 @@ These options define `Mamba-YOLO-T-VID-VideoStable-v9`:
 --track_recall_loss 0.5
 --track_consistency_loss 0.2
 --track_cls_consistency_loss 0.1
+--extra_eval_tracker ultralytics/cfg/trackers/bytetrack_vidstable.yaml
+--extra_eval_track_conf 0.05
 ```
 
 Periodic clip/window extra evaluation uses GT-free temporal stabilization by
 default. It smooths high-overlap short detection tracklets for flicker, then
-smooths ByteTrack classes, relinks strict short fragments, and fills one-frame
+uses `bytetrack_vidstable.yaml`, smooths ByteTrack classes, absorbs bridge
+tracklets inside short gaps, relinks strict short fragments, and fills one-frame
 track gaps for MOT/ID. Add `--extra_eval_no_temporal_stabilize` only for the
 ablation without this video-metric stabilizer.
 
@@ -221,7 +226,7 @@ Recommended comparisons:
   compare against `temporal_fusion none`.
 
 The previous score-smoothing/proposal branches improved precision and identity
-stability inconsistently. The current v9 path is intentionally simpler on the
+stability inconsistently. The current v10 path is intentionally simpler on the
 model side: one local temporal residual adapter is added before the existing
 Detect classification branch, and the extra-eval export applies conservative
 GT-free temporal stabilization for the video metrics.

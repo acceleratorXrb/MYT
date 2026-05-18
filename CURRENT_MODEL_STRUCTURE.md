@@ -12,7 +12,7 @@ Last updated: 2026-05-18
 Short name used in notes:
 
 ```text
-Mamba-YOLO-T-VID-VideoStable-v9
+Mamba-YOLO-T-VID-VideoStable-v10
 ```
 
 ## Fixed Backbone and Neck
@@ -84,8 +84,9 @@ clip/window detections
   -> flicker evaluation
 
 clip/window detections
-  -> ByteTrack
+  -> VID-stable ByteTrack
   -> same-track class smoothing
+  -> bridge-track absorption inside short gaps
   -> strict short-fragment ID relinking
   -> one-frame gap interpolation when endpoints strongly overlap
   -> MOT/ID evaluation
@@ -94,6 +95,11 @@ clip/window detections
 This is intentionally conservative: it does not use annotations, does not create
 large numbers of new boxes, and only acts on highly overlapping neighboring
 predictions. Use `--extra_eval_no_temporal_stabilize` for ablations.
+
+The VID-stable tracker is `ultralytics/cfg/trackers/bytetrack_vidstable.yaml`.
+It keeps ByteTrack but uses a longer lost-track buffer, a lower low-score
+association threshold, and a small class-mismatch penalty so dense VisDrone
+objects are less likely to swap IDs across frames.
 
 ## Current Main Structural Hyperparameters
 
@@ -110,6 +116,8 @@ predictions. Use `--extra_eval_no_temporal_stabilize` for ablations.
 --track_recall_loss 0.5
 --track_consistency_loss 0.2
 --track_cls_consistency_loss 0.1
+--extra_eval_tracker ultralytics/cfg/trackers/bytetrack_vidstable.yaml
+--extra_eval_track_conf 0.05
 ```
 
 ## What These Options Mean

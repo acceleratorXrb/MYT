@@ -191,7 +191,13 @@ def main():
             mode_label = "clip"
 
         if args.no_temporal_stabilize:
-            stab_stats = {"track_class_changes": 0, "track_fragment_links": 0, "track_gap_fills": 0}
+            stab_stats = {
+                "track_class_changes": 0,
+                "track_gap_absorptions": 0,
+                "track_fragment_links": 0,
+                "track_gap_fills": 0,
+                "track_duplicate_drops": 0,
+            }
         else:
             records, stab_stats = stabilize_track_records(records)
         lines = format_records(records)
@@ -200,7 +206,8 @@ def main():
         print(
             f"{seq_dir.name}: {len(frames)} frames, {len(lines)} {mode_label} tracks -> {output} "
             f"[temporal-stabilize cls_changes={stab_stats['track_class_changes']} "
-            f"links={stab_stats['track_fragment_links']} fills={stab_stats['track_gap_fills']}]"
+            f"absorbs={stab_stats['track_gap_absorptions']} links={stab_stats['track_fragment_links']} "
+            f"fills={stab_stats['track_gap_fills']} dup_drops={stab_stats['track_duplicate_drops']}]"
         )
 
 

@@ -1,0 +1,13 @@
+# Ultralytics YOLO, AGPL-3.0 license
+# VID-stable ByteTrack settings for VisDrone-VID extra evaluation.
+#
+# This keeps the original ByteTrack algorithm but makes the association more
+# tolerant of short occlusions and slightly class-aware for dense video scenes.
+
+tracker_type: bytetrack
+track_high_thresh: 0.5
+track_low_thresh: 0.05
+new_track_thresh: 0.6
+track_buffer: 90
+match_thresh: 0.85
+class_match_weight: 0.15

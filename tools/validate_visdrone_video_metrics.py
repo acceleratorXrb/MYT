@@ -158,10 +158,20 @@ def validate_fixture(root: Path, verbose: bool = False) -> None:
         VidRecord(4, 11, 0, 0, 10, 10, 0.80, 1),
     ]
     track_stable, track_stats = stabilize_track_records(track_records)
+    assert_equal("stabilizer.track_gap_absorptions", track_stats["track_gap_absorptions"], 0)
     assert_equal("stabilizer.track_fragment_links", track_stats["track_fragment_links"], 1)
     assert_equal("stabilizer.track_gap_fills", track_stats["track_gap_fills"], 1)
     assert_equal("stabilizer.track_frames", [r.frame for r in track_stable], [1, 2, 4, 3])
     assert_equal("stabilizer.track_ids", sorted({r.track_id for r in track_stable}), [10])
+
+    bridge_records = [
+        VidRecord(1, 10, 0, 0, 10, 10, 0.80, 1),
+        VidRecord(3, 10, 2, 0, 10, 10, 0.80, 1),
+        VidRecord(2, 99, 1, 0, 10, 10, 0.40, 1),
+    ]
+    bridge_stable, bridge_stats = stabilize_track_records(bridge_records)
+    assert_equal("stabilizer.bridge_absorptions", bridge_stats["track_gap_absorptions"], 1)
+    assert_equal("stabilizer.bridge_ids", sorted({r.track_id for r in bridge_stable}), [10])
 
 
 def main() -> None:

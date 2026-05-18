@@ -1,7 +1,7 @@
-id: video_stable_v9_2026-05-18
+id: video_stable_v10_2026-05-18
 date: "2026-05-18"
-name: Mamba-YOLO-T-VID-VideoStable-v9
-status: previous_main_archived
+name: Mamba-YOLO-T-VID-VideoStable-v10
+status: current_main
 
 constraint:
   keep_backbone: official Mamba-YOLO-T
@@ -182,7 +182,7 @@ training_command:
   - --project
   - output_dir/visdrone_vid
   - --name
-  - video_stable_v9
+  - video_stable_v10
 
 notes:
   - This replaces the failed TTRM direction with an in-model, no-output-amplification change.
