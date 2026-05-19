@@ -77,6 +77,7 @@ python tools/model_variant.py train-command video_stable_v10_2026-05-18
 | `RUN_VISDRONE_VID.md` | VisDrone-VID preparation and training notes. |
 | `RUN_VISDRONE_VID_YOLOV.md` | Notes for the YOLOV-style VID model path. |
 | `CURRENT_MODEL_STRUCTURE.md` | Current model-structure marker for thesis writing and reproducibility. |
+| `CURRENT_NEW_MODEL.md` | Chinese thesis-oriented explanation of the current new model, including input flow, Detect_VID, TRFA, losses, and video metric evaluation. |
 | `MODEL_HISTORY.md` | Index of saved model-stage records. |
 
 ### Model and Config Files
